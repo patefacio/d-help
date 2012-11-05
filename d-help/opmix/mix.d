@@ -30,7 +30,6 @@ module opmix.mix;
 
 import std.algorithm;
 import std.math;
-import std.stdio;
 import std.string;
 import std.traits;
 
@@ -441,10 +440,6 @@ template HasDup(T) {
   enum HasDup = __traits(hasMember, T, "dup"); 
 }
 
-template HasToHash(T) { 
-  enum HasToHash = __traits(hasMember, T, "toHash"); 
-}
-
 template IsImmutable(T) { 
   static if(is(T U == immutable U)) {
     enum IsImmutable = true;
@@ -552,12 +547,16 @@ unittest {
 
   import std.stdio;
 
-  // Default comparison of associative arrays does not work, should not do
-  // this
-  assert((["fo".idup:2] < ["fo".idup:3]) == (["fo".idup:3] < ["fo".idup:2]));
+  // Default equality comparison of associative arrays is not deep. The
+  // following illustrates the issue when types are not wrapped. If deep
+  // semantics existed, the expression would always be false. For me this
+  // expression is true. It is left commented out in case I am just lucky.
+
+  // assert((["fo".idup:2] < ["fo".idup:3]) == (["fo".idup:3] < ["fo".idup:2]));
 
   auto z1 = ["fo".idup:2], z2 = ["fo".idup:2];
-  //assert(typesDeepEqual(["fo".idup:2], ["fo".idup:2]));
+  // typesDeepCmp(auto ref T...) signature required for literals
+  assert(typesDeepEqual(["fo".idup:2], ["fo".idup:2]));
   assert(typesDeepEqual(z1,z2));
 
   {
@@ -589,7 +588,6 @@ unittest {
 
   void equalHashSanity(T)(const ref T lhs, const ref T rhs) {
     assert(lhs == rhs);    
-
     assert(!(lhs<rhs));
     assert(!(rhs>lhs));
     auto h1 = lhs.toHash();
@@ -729,7 +727,7 @@ unittest {
   // Now not empty - '==' not deep compare
   assert(uwhuwh1 != uwhuwh2);
   assert(typesDeepEqual(uwhuwh1,uwhuwh2));
-  writeln("Done");
+  writeln("Done unittest mix");
 
 // end <dmodule mix unittest>
 }
