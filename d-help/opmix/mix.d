@@ -226,6 +226,7 @@ const string HashSupport = `
   struct is missing. The compile time logs help determine at what stage
   compilation goes off the rails.  To enable set LogCompile to true.
 */
+static if(LogRunTime) import std.stdio;
 string LogInfo(string tag, string T, string instance) { 
   return `
   static if(LogCompile) {
@@ -294,10 +295,23 @@ bool typesDeepEqual(T,F)(auto ref T lhs, auto ref F rhs) if(is(Unqual!T == Unqua
       mixin(LogInfo("...typesDeepEqual struct ", "T", "lhs"));
       foreach (i, ignore ; typeof(T.tupleof)) {
         mixin(LogInfo("struct field <"~lhs.tupleof[i].stringof~">", "T.tupleof[i]", "lhs.tupleof[i]"));
+        alias typeof(T.tupleof[i]) FieldType;
         static if(T.tupleof[i].stringof.endsWith(".this")) {
           // Skip if nested class
         } else {
-          result &= typesDeepEqual(lhs.tupleof[i], rhs.tupleof[i]);
+          // Special case pointed out by Tobias
+          static if(isPointer!FieldType && is(PointerTarget!FieldType == T)) {
+            auto l = lhs.tupleof[i];
+            auto r = rhs.tupleof[i];
+            if((l && ((*l).tupleof[i] == rhs.tupleof[i])) &&
+               (r && ((*r).tupleof[i] == lhs.tupleof[i]))) {
+              // let it ride
+            } else {
+              result &= typesDeepEqual(l, r);
+            }
+          } else {
+            result &= typesDeepEqual(lhs.tupleof[i], rhs.tupleof[i]);
+          }
         }
         if(!result) return false;
       }
@@ -507,6 +521,16 @@ unittest {
       dchar _dchar;
       string _string;
     }
+  }
+
+  /**
+     One grabs the other, the other grabs the one - was causing infinite loop
+  */
+  struct PartGrabbers { 
+    alias PartGrabbers* PartGrabbersPtr;
+    mixin(HashSupport);
+    PartGrabbersPtr other;
+    int extra = 3;
   }
 
   /**
@@ -727,6 +751,20 @@ unittest {
   // Now not empty - '==' not deep compare
   assert(uwhuwh1 != uwhuwh2);
   assert(typesDeepEqual(uwhuwh1,uwhuwh2));
+
+  PartGrabbers pg1, pg2;
+  pg1.other = &pg2;
+  pg2.other = &pg1;
+  assert(pg1 == pg2);
+  pg1.extra++;
+  assert(pg1 != pg2);
+  pg2.extra++;
+  assert(pg1 == pg2);  
+  assert(typesDeepEqual(pg1, pg2));
+  pg2.other = null;
+  assert(!typesDeepEqual(pg1, pg2));
+  pg1.other = null;
+  assert(typesDeepEqual(pg1, pg2));
   writeln("Done unittest mix");
 
 // end <dmodule mix unittest>
