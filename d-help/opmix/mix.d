@@ -23,7 +23,9 @@
    
    	writeln(S([1: 2]) == S([1: 2]));  // now true false
    
-   Provides other mixins like: OpCmp, Dup, Deep, PostBlit, ToHash, HashSupport
+   Provides other mixins like: OpEquals, PostBlit, OpCmp, Dup, Deep, ToHash,
+   HashSupport
+
 */
 
 module opmix.mix;
@@ -32,6 +34,12 @@ import std.algorithm;
 import std.math;
 import std.string;
 import std.traits;
+import std.stdio;
+
+/**
+   Set this to true to see postblits
+*/
+const bool LogPostblit = false;
 
 /**
    Set this to true to see what is going on at compile time
@@ -83,47 +91,13 @@ int opCmp(const typeof(this) other) const {
 const string Dup = `
 
   @property auto idup() const {
-    alias typeof(this) ThisType;
-    return cast(immutable(ThisType)) this.dup;
+    return cast(immutable(typeof(this)))this.dup;
   }
 
   @property auto dup() const {
-    alias Unqual!(typeof(this)) UnqualThisType;
-
-    UnqualThisType result;    
-
-    foreach (i, field ; typeof(UnqualThisType.tupleof)) {
-      alias typeof(result.tupleof[i]) FieldType;
-
-      enum fieldHasDup = HasDup!FieldType;
-      enum fieldIsDynamicArray = isDynamicArray!(FieldType);
-      enum isPointer = isPointer!(FieldType);
-
-      static if(isPointer) {
-        alias PointerTarget!(FieldType) TargetType;
-        FieldType fieldPtr = cast(FieldType)this.tupleof[i];
-        if(fieldPtr) {
-          static if(__traits(compiles, (result.tupleof[i] = new TargetType))) {
-             result.tupleof[i] = new TargetType;
-             *result.tupleof[i] = *fieldPtr;
-          } else {
-             pragma(msg, "Unable to heap allocate '", 
-                    typeof(result.tupleof[i]), " ", typeof(this).tupleof[i].stringof, 
-                    "', using pointer copy");
-             result.tupleof[i] = fieldPtr;
-          }
-        }
-      } else static if(fieldIsDynamicArray || fieldHasDup) {
-        result.tupleof[i] = cast(typeof(result.tupleof[i])) this.tupleof[i].dup;
-        static if (fieldIsDynamicArray) {
-          assert((result.tupleof[i] is null) || (result.tupleof[i].ptr != this.tupleof[i].ptr));
-        }
-      } else {
-        result.tupleof[i] = this.tupleof[i];
-      }
-    }
-
-    return result;
+    Unqual!(typeof(this)) temp;
+    gdup(temp, this);
+    return temp;
   }
 `;
 
@@ -147,35 +121,43 @@ const string Deep = `
    mixin(DeepSemantics) wich includes mixin(PostBlit) and mixin(OpEquals).
 */
 const string PostBlit = `
-
   this(this) {
     alias typeof(this) T;
     foreach (i, field ; typeof(T.tupleof)) {
       alias typeof(T.tupleof[i]) FieldType;
-
-      enum fieldHasDup = HasDup!FieldType;
-      enum fieldIsDynamicArray = isDynamicArray!(FieldType);
-      enum fieldIsAssociativeArray = isAssociativeArray!(FieldType);
-      enum isPointer = isPointer!(FieldType);
-
-      static if(isPointer) {
+      static if(isPointer!(FieldType)) {
         alias PointerTarget!(FieldType) TargetType;
-        FieldType fieldPtr = cast(FieldType)this.tupleof[i];
-        if(fieldPtr) {
+        if(this.tupleof[i]) {
           static if(__traits(compiles, (this.tupleof[i] = new TargetType))) {
-             this.tupleof[i] = new TargetType;
-             *this.tupleof[i] = *fieldPtr;
+             Unqual!FieldType temp = new TargetType;
+             gdup(*temp, *this.tupleof[i]);
+             *this.tupleof[i] = *temp;
           } else {
-             pragma(msg, "Unable to heap allocate '", 
-                    typeof(this.tupleof[i]), " ", typeof(this).tupleof[i].stringof, 
+             static assert(0, "Unable to heap allocate '"~
+                    typeof(this.tupleof[i])~" "~typeof(this).tupleof[i].stringof~
                     "', using pointer copy");
-             this.tupleof[i] = fieldPtr;
           }
         }
-      } else static if(fieldIsDynamicArray || fieldIsAssociativeArray || fieldHasDup) {
-        this.tupleof[i] = cast(typeof(this.tupleof[i])) this.tupleof[i].dup;
+      } else static if(isDynamicArray!(FieldType)) {
+        static if(!isMutable!(ArrayElementType!FieldType)) {
+          static if(LogCompile) { 
+            pragma(msg, "CT: No needless duping of immutable element type arr ", T.tupleof[i]); 
+          }
+        } else {
+          Unqual!FieldType temp;
+          gdup(temp, this.tupleof[i]);
+          this.tupleof[i] = temp;
+        }
+      } else static if(isAssociativeArray!(FieldType) || HasDup!FieldType) {
+          Unqual!FieldType temp;
+          gdup(temp, this.tupleof[i]);
+          this.tupleof[i] = temp;
+      } else {
+        pragma(msg, "Unhandled type in postblit ", T.tupleof[i]);
+        assert(false);
       }
     }
+    static if(LogPostblit) writeln("Postblit ", typeid(T), " ", pp!(T, "...")(this));
   }
 `;
 
@@ -183,15 +165,15 @@ const string PostBlit = `
    Mixin to provide toHash for a struc that incorporates some aspect of all
    fields to the function.
 */
-const string ToHash = `
+const string ToHash = "
   /**
     Hashing function hitting all data - mileage may vary.
-    TODO: Make this and fieldsToHash pure when foreach iteration permits
+    TODO: Make this and deepHash pure when foreach iteration permits
    */
   hash_t toHash() const /* pure */ nothrow {
-    return fieldsToHash!(typeof(this))(this);
+    return deepHash!(typeof(this))(this);
   }
-`;
+";
 
 /**
    Mixin to provide hashing functionality on a struct. For example, to make your
@@ -220,22 +202,109 @@ const string HashSupport = `
 
 
 
+
+static if(LogRunTime) { 
+  import std.stdio; 
+}
+
+static if(LogPostblit) { 
+  import std.stdio; 
+  import pprint.pp; 
+}
+
 /** 
   For debugging, logs a compile time message at various points. If mixing in
   OpEquals or hashing and there are compile errors, maybe something in the
   struct is missing. The compile time logs help determine at what stage
   compilation goes off the rails.  To enable set LogCompile to true.
 */
-static if(LogRunTime) import std.stdio;
 string LogInfo(string tag, string T, string instance) { 
   return `
   static if(LogCompile) {
     pragma(msg, "CT: `~tag~`", `~T~`);
   }
   static if(LogRunTime) {
-    writeln("RT: `~tag~`", `~instance~`);
+    try {
+      writeln("RT: `~tag~`", `~instance~`);
+    } catch(Exception) {
+    }
   }`;
 }
+
+/** Discriminates a pass type by its size
+ */
+template PreferredPassType(T) {
+  static if(T.sizeof > 16) {
+    enum PreferredPassType = `const ref `~T.stringof;
+  } else {
+    enum PreferredPassType = T.stringof;
+  }
+}
+
+/** Provides mixin for making a field read only.
+ *  For example mixin(ReadOnly!_fieldName) provides a getter named fieldName.
+ */
+template ReadOnly(alias name) {
+  enum v = name.stringof;
+  enum p = name.stringof[1..$];
+  enum ReadOnly = `
+public @property auto `~p~`() const { 
+  debug writeln("Reading ", `~v~`);
+  return `~v~`; 
+}
+`;
+}
+
+/** Provides mixin for the *read* accessor when making a field read/write.
+ * Don't be a liar - provide your own write accessor.
+ */
+template ReadWrite(alias name) {
+  enum ReadWrite = ReadOnly!name;
+}
+
+void gdup(T1, T2)(ref T1 t1, ref T2 t2) {
+  static if(isBasicType!T1) {
+    t1 = t2;
+  } else static if(isDynamicArray!T1 && isArrayOfImmutable!T1) {
+    t1 = t2.idup;
+  } else static if(isDynamicArray!T1) {
+    t1 = t2.dup;
+  } else static if(isAssociativeArray!T1) {
+      alias KeyType!(T1) AAKeyType;
+      alias ValueType!(T1) AAValueType;
+      alias Unqual!(AAValueType)[Unqual!(AAKeyType)] NoConstAssocArr;
+      t1.clear();
+      foreach(k, v2; t2) {
+        AAValueType v1;
+        gdup(v1, v2);
+        t1[k] = v1;
+      }
+  } else static if(is(T1==struct)) {
+    foreach (i, ignore ; typeof(T1.tupleof)) {
+      static if(T1.tupleof[i].stringof.endsWith(".this")) {
+        static assert(0, "no dup of nested non static structs!");
+      }
+      gdup(t1.tupleof[i], t2.tupleof[i]);
+    }
+  } else static if(isPointer!T1) {
+    alias Unqual!(PointerTarget!T1) Target;
+    if(t2) {
+      static if(__traits(compiles, (t1 = new Target))) {
+        t1 = new Target;
+        gdup(*t1, *t2); 
+      } else {
+        static assert(0, "gdup will not work with "~
+                      Target.stringof~
+                      " since can not be default heap allocated");
+      }
+    }
+  } else static if(is(T1==class)) {
+    static assert(0, "Class gdup not supported, requested type "~T);
+  } else {
+    t1 = t2;
+  }
+}
+
 
 /** Compare for equality all fields in a class
     Original courtesy of Tobias Pankrath
@@ -322,6 +391,14 @@ bool typesDeepEqual(T,F)(auto ref T lhs, auto ref F rhs) if(is(Unqual!T == Unqua
     return result;
   }
 
+int opCmpPreferred(T, F)(const ref T lhs, const ref F rhs) {
+  static if(__traits(compiles, (lhs.opCmp(rhs)))) {
+    return lhs.opCmp(rhs);
+  } else {
+    return typesDeepCmp(lhs, rhs);
+  }
+}
+
 /** Compare all fields for suitable opCmp.
     Order will be that returned by T.tupleof
  */
@@ -330,25 +407,27 @@ int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs) if(is(Unqual!T == Unqual!F
   static if(isFloatingPoint!(T)) {
     if(isnan(lhs) && isnan(rhs)) { return 0; }
     return (lhs<rhs)? -1 : (lhs>rhs)? 1 : 0;
+  } else static if(isSomeString!T) {
+    return lhs.cmp(rhs);
   } else static if(is(T == struct)) {
       foreach (i, ignore ; typeof(T.tupleof)) {
         static if(T.tupleof[i].stringof.endsWith(".this")) {
           // Skip if nested class
+        } else {
+          int result = opCmpPreferred(lhs.tupleof[i], rhs.tupleof[i]);
+          if(result) return result;
         }
-        int result = typesDeepCmp(lhs.tupleof[i], rhs.tupleof[i]);
-        if(result) return result;
       }
       return 0;
   } else static if(isPointer!(T)) {
       int result;
       if(lhs && rhs) {
-        result = typesDeepCmp(*lhs, *rhs);
+        result = opCmpPreferred(*lhs, *rhs);
       } else {
         result = rhs? -1 : lhs? 1 : 0;
       }
       return result;
   } else static if(isAssociativeArray!(T)) {
-
     ///// TODO: Remove const casts on keys
     // Compare keys in order
     alias Unqual!(ValueType!T)[Unqual!(KeyType!T)] NoConstAssocArr;
@@ -367,7 +446,7 @@ int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs) if(is(Unqual!T == Unqual!F
       auto rhsVal = key in rhs;
 
       if(lhsVal && rhsVal) { 
-        auto result = typesDeepCmp(*lhsVal, *rhsVal);
+        auto result = opCmpPreferred(*lhsVal, *rhsVal);
         if(result) return result;
       } else if(rhsVal) { 
         return -1;
@@ -382,6 +461,15 @@ int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs) if(is(Unqual!T == Unqual!F
   }
 }
 
+
+hash_t toHashPreferred(T)(const ref T t) nothrow {
+  static if(is(T==struct) && __traits(compiles, (t.toHash()))) {
+    return t.toHash();
+  } else {
+    return deepHash(t);
+  }
+}
+
 /**
 
   Computes a hash taking into account all fields. A good question in a long
@@ -391,34 +479,33 @@ int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs) if(is(Unqual!T == Unqual!F
   This uses the same ideas and provides function to wrap as mixin.
 
  */
-hash_t fieldsToHash(T)(const ref T t) nothrow { 
+hash_t deepHash(T)(const ref T t) nothrow { 
   const int prime = 23;
   hash_t result = 17;
   static if(isPointer!T) {
     mixin(LogInfo("Hashing ptr ", "T", "t"));
-    alias PointerTarget!(T) TargetType;
     if(t) {
-      result = result*prime + fieldsToHash(*t);
+      result = result*prime + deepHash(*t);
     }
   } else static if(isAssociativeArray!T) {
     try {
       foreach(key, value; t) {
         mixin(LogInfo("Hashing assoc array ", "T", "t"));
-        result = result*prime + fieldsToHash(key);
-        result = result*prime + fieldsToHash(value);
+        result = result*prime + deepHash(key);
+        result = result*prime + deepHash(value);
       }
     } catch(Exception) {
       assert(0);
     }
+  } else static if(isSomeString!(T)) {
+    mixin(LogInfo("Hashing string ", "T", "t"));
+    result = result*prime + typeid(T).getHash(&t);
   } else static if(isArray!T) {
     mixin(LogInfo("Hashing array ", "T", "t"));
     size_t end = t.length;
     for(size_t i=0; i<end; ++i) {
-      result = result*prime + fieldsToHash(t[i]);
+      result = result*prime + toHashPreferred(t[i]);
     }
-  } else static if(isSomeString!(T)) {
-    mixin(LogInfo("Hashing string ", "T", "t"));
-    result = result*prime + typeid(T).getHash(&t);
   } else static if (isIntegral!(T) || isSomeChar!(T) || 
                     isBoolean!(T) || is(T==enum)) {
     mixin(LogInfo("Hashing integral, char, bool, enum ", 
@@ -440,18 +527,40 @@ hash_t fieldsToHash(T)(const ref T t) nothrow {
     foreach (i, ignore ; typeof(T.tupleof)) {
       static if(T.tupleof[i].stringof.endsWith(".this")) {
       } else {
-        result = result*prime + fieldsToHash(t.tupleof[i]);
+        result = result*prime + toHashPreferred(t.tupleof[i]);
       }
     }
   } else {
-    assert(false);
+    static assert(0, "Add support for "~T);
   }
 
   return result;
 }
 
+template DeepUnqual(T) {
+  static if(isAssociativeArray!T) {
+    alias Unqual!(Unqual!(ValueType!T)[Unqual!(KeyType!T)]) DeepUnqual;    
+  } else static if(isDynamicArray!T) {
+    alias Unqual!(Unqual!(ArrayElementType!T)[]) DeepUnqual;
+  } else {
+    alias Unqual!T DeepUnqual;
+  }
+}
+
+template ArrayElementType(T : U[], U) {
+  alias U ArrayElementType;
+}
+
 template HasDup(T) { 
   enum HasDup = __traits(hasMember, T, "dup"); 
+}
+
+template isArrayOfImmutable(T) {
+  static if(isDynamicArray!T && !isMutable!(ArrayElementType!T)) {
+    enum isArrayOfImmutable = true;
+  } else {
+    enum isArrayOfImmutable = false;
+  }
 }
 
 template IsImmutable(T) { 
@@ -470,7 +579,9 @@ template IsImmutable(T) {
 
 unittest { 
   /**
-     Usage of basic associative array in struct.
+     Usage of basic associative array in struct.  Hash support is irrespective of
+     copy semantics.  This class, mixing in Dup and not PostBlit has reference
+     semantics.
   */
   struct WrappedHash { 
     mixin(HashSupport);
@@ -478,6 +589,20 @@ unittest {
     private {
       int[string] _m;
       string _s = "s";
+    }
+  }
+
+  /**
+     Similar to above, but with deep semantics (mixin(PostBlit)) causing
+     immutable(T)[] to be shallow copied since its safe.
+  */
+  struct WrappedHashDeep { 
+    mixin(HashSupport);
+    mixin(PostBlit);
+    private {
+      int[string] _m;
+      string _s = "s";
+      char[] _ca;
     }
   }
 
@@ -494,6 +619,7 @@ unittest {
       int[string] _m;
       char[] _c;
       string _s = "s";
+      const(WrappedHash)[] _wh;
     }
   }
 
@@ -595,17 +721,59 @@ unittest {
     assert(WrappedHash(["fo".idup:3]) in [ WrappedHash(["fo".idup:3]) : 3 ]);
     auto wh = WrappedHash(["test".idup:4]);
     assert((wh == wh.dup) && (wh.toHash() && (wh.toHash() == wh.dup.toHash())));
+    auto wh2 = wh;
+  }
+
+  {
+    /// Demonstrate bypassing '==', using typesDeepEqual instead.
+    WrappedHash wh1, wh2;
+    // unwrapped hashes
+    WrappedHash[string] uwh1, uwh2;
+    // unwarpped hashes of unwrapped hashes
+    WrappedHash[WrappedHash[string]] uwhuwh1, uwhuwh2;
+    // As established, here these are equal purely out of luck - because empty
+    assert(wh1==wh2);
+    assert(uwh1==uwh2);
+    assert(uwhuwh1==uwhuwh2);
+    uwhuwh1[uwh1.dup] = wh1.dup;
+    uwhuwh2[uwh1.dup] = wh2.dup;
+  }
+
+  {
+    WrappedHashDeep wh1 = {["fo":2], "somestring"};
+    wh1._ca = [ 'a', 'b', 'c'];
+    WrappedHashDeep wh2 = wh1;
+    // Since _s is immutable(T)[] it is shallow copied
+    assert(wh1._s.ptr == wh2._s.ptr);
+    // Since _ca is mutable T[] it is deep copied
+    assert(wh1._ca.ptr != wh2._ca.ptr);
+    // And yet
+    assert(wh1==wh2);
+    wh1._ca[2] = 'd';
+    assert(wh1 > wh2);
+    assert(wh2 < wh1);
+    wh2._ca[2] = 'd';
+    assert(!(wh1 < wh2));
+    assert(!(wh2 < wh1));
+    assert(wh1 in [ wh2 : 3 ]);
+    wh1._ca[2] = 'e';
+    assert(wh1 !in [ wh2 : 3 ]);
   }
 
   {
     PostBlitExample ex1;
     ex1._m["foo".idup] = 42;
     ex1._s = "this is a test".idup;
+    ex1._c = ['a','b','c'];
+    const(WrappedHash) cwh = {["fo".idup:2], "goo"};
+    ex1._wh ~= cwh;
     PostBlitExample ex2 = ex1;
     // they are deep equal
     assert(ex1 == ex2);
-    // they are not sharing
-    assert(ex1._s.ptr != ex2._s.ptr);
+    // they are sharing arrays of immutable, but that is ok
+    assert(ex1._s.ptr == ex2._s.ptr);
+    // they are not sharing arrays
+    assert(ex1._c.ptr != ex2._c.ptr);
     ex1._m["foo"]++;
     assert(ex1._m != ex2._m);
   }
@@ -628,6 +796,7 @@ unittest {
         bt1.tupleof[i] = bt2.tupleof[i] = 3;
       }
       bt2.tupleof[i]++;
+      assert(bt1.toHash() != bt2.toHash());
       assert(bt1<bt2);
       assert(bt2>bt1);
       bt2.tupleof[i]--;
@@ -735,22 +904,6 @@ unittest {
   assert((idup == a) && (idup == dup));
   assert(IsImmutable!(typeof(idup)) && !IsImmutable!(typeof(dup)));
   assert(a.dup.idup == a.idup.dup);
-
-  /// Demonstrate bypassing '==', using typesDeepEqual instead.
-  WrappedHash wh1, wh2;
-  // unwrapped hashes
-  WrappedHash[string] uwh1, uwh2;
-  // unwarpped hashes of unwrapped hashes
-  WrappedHash[WrappedHash[string]] uwhuwh1, uwhuwh2;
-  // As established, here these are equal purely out of luck - because empty
-  assert(wh1==wh2);
-  assert(uwh1==uwh2);
-  assert(uwhuwh1==uwhuwh2);
-  uwhuwh1[uwh1.dup] = wh1.dup;
-  uwhuwh2[uwh1.dup] = wh2.dup;
-  // Now not empty - '==' not deep compare
-  assert(uwhuwh1 != uwhuwh2);
-  assert(typesDeepEqual(uwhuwh1,uwhuwh2));
 
   PartGrabbers pg1, pg2;
   pg1.other = &pg2;
