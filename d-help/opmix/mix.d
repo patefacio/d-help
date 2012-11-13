@@ -740,7 +740,8 @@ unittest {
   }
 
   {
-    WrappedHashDeep wh1 = {["fo":2], "somestring"};
+    auto arr = ["fo":2];
+    WrappedHashDeep wh1 = {arr, "somestring"};
     wh1._ca = [ 'a', 'b', 'c'];
     WrappedHashDeep wh2 = wh1;
     // Since _s is immutable(T)[] it is shallow copied
@@ -762,10 +763,11 @@ unittest {
 
   {
     PostBlitExample ex1;
+    auto arr = ["fo":2];
     ex1._m["foo".idup] = 42;
     ex1._s = "this is a test".idup;
     ex1._c = ['a','b','c'];
-    const(WrappedHash) cwh = {["fo".idup:2], "goo"};
+    const(WrappedHash) cwh = {arr, "goo"};
     ex1._wh ~= cwh;
     PostBlitExample ex2 = ex1;
     // they are deep equal
@@ -827,14 +829,16 @@ unittest {
   }
 
   // Create s.t. a==b and a!=c
-  A a, b, c = { _w : ['a','b'], _x : "goo".idup, _map : [ "grape".idup : "vine".idup ] };
+  auto ss1 = [ "grape".idup : "vine".idup ];
+  auto ss2 = [ "grape".idup : "vine".idup ];
+  A a, b, c = { _w : ['a','b'], _x : "goo".idup, _map : ss1 };
   // Copy same string different address keeping a==b
   b._x = "foo".idup;
 
   assert(a.toHash() && (a.toHash() == a.dup.toHash()));
 
   // Similar for const objects
-  const(A) ca, cb, cc = { _w : ['a','b'], _x : "goo".idup, _map : [ "grape".idup : "vine".idup ] };
+  const(A) ca, cb, cc = { _w : ['a','b'], _x : "goo".idup, _map : ss2 };
 
   // without opEquals deep equality compare will fail until 3789 fixed
   equalHashSanity(a, b);
