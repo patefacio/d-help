@@ -23,9 +23,8 @@
    
    	writeln(S([1: 2]) == S([1: 2]));  // now true false
    
-   Provides other mixins like: OpEquals, PostBlit, OpCmp, Dup, Deep, ToHash,
+   Provides other mixins like: OpEquals, PostBlit, OpCmp, Dup, Deep, ToHash, 
    HashSupport
-
 */
 
 module opmix.mix;
@@ -35,6 +34,7 @@ import std.math;
 import std.string;
 import std.traits;
 import std.stdio;
+import pprint.pp;
 
 /**
    Set this to true to see postblits
@@ -125,39 +125,32 @@ const string PostBlit = `
     alias typeof(this) T;
     foreach (i, field ; typeof(T.tupleof)) {
       alias typeof(T.tupleof[i]) FieldType;
-      static if(isPointer!(FieldType)) {
-        alias PointerTarget!(FieldType) TargetType;
-        if(this.tupleof[i]) {
-          static if(__traits(compiles, (this.tupleof[i] = new TargetType))) {
-             Unqual!FieldType temp = new TargetType;
-             gdup(*temp, *this.tupleof[i]);
-             *this.tupleof[i] = *temp;
-          } else {
-             static assert(0, "Unable to heap allocate '"~
-                    typeof(this.tupleof[i])~" "~typeof(this).tupleof[i].stringof~
-                    "', using pointer copy");
-          }
-        }
-      } else static if(isDynamicArray!(FieldType)) {
-        static if(!isMutable!(ArrayElementType!FieldType)) {
-          static if(LogCompile) { 
-            pragma(msg, "CT: No needless duping of immutable element type arr ", T.tupleof[i]); 
-          }
-        } else {
-          Unqual!FieldType temp;
-          gdup(temp, this.tupleof[i]);
-          this.tupleof[i] = temp;
-        }
-      } else static if(isAssociativeArray!(FieldType) || HasDup!FieldType) {
-          Unqual!FieldType temp;
-          gdup(temp, this.tupleof[i]);
-          this.tupleof[i] = temp;
+      static if(isDynamicArray!(FieldType) &&
+                isArrayOfImmutable!FieldType) {
+        static if(LogCompile) 
+          pragma(msg, 
+                 "CT: No needless duping of immutable element type arr ", 
+                 T.tupleof[i]); 
+      } else static if(isPointer!(FieldType) || 
+                       isDynamicArray!(FieldType) ||
+                       isAssociativeArray!(FieldType) ||
+                       HasDup!FieldType) {
+        gdup(this.tupleof[i], this.tupleof[i]);
+      } else static if(hasAliasing!FieldType) {
+        static if(LogCompile) 
+          pragma(msg, 
+                 "CT: Postblit of ", T, " drilling down on ", 
+                 T.tupleof[i].stringof);
+        gdup(this.tupleof[i], this.tupleof[i]);
       } else {
-        pragma(msg, "Unhandled type in postblit ", T.tupleof[i]);
-        assert(false);
+        static if(LogCompile) 
+          pragma(msg, 
+                 "CT: Postblit of ", T, " ignoring ", 
+                 T.tupleof[i].stringof);
       }
     }
-    static if(LogPostblit) writeln("Postblit ", typeid(T), " ", pp!(T, "...")(this));
+    static if(LogPostblit) 
+      writeln("Postblit ", typeid(T), " ", pp!(T, "...")(this));
   }
 `;
 
@@ -165,7 +158,7 @@ const string PostBlit = `
    Mixin to provide toHash for a struc that incorporates some aspect of all
    fields to the function.
 */
-const string ToHash = "
+const string ToHash = `
   /**
     Hashing function hitting all data - mileage may vary.
     TODO: Make this and deepHash pure when foreach iteration permits
@@ -173,7 +166,7 @@ const string ToHash = "
   hash_t toHash() const /* pure */ nothrow {
     return deepHash!(typeof(this))(this);
   }
-";
+`;
 
 /**
    Mixin to provide hashing functionality on a struct. For example, to make your
@@ -199,8 +192,6 @@ const string HashSupport = `
   mixin(OpCmp);
   mixin(ToHash);
 `;
-
-
 
 
 static if(LogRunTime) { 
@@ -262,36 +253,101 @@ template ReadWrite(alias name) {
   enum ReadWrite = ReadOnly!name;
 }
 
-void gdup(T1, T2)(ref T1 t1, ref T2 t2) {
-  static if(isBasicType!T1) {
+@property auto gdup(T)(const ref T t) {
+  DeepUnqual!T result;
+  static if(LogCompile) 
+    pragma(msg, 
+           "CT: gdup prop on (", 
+           typeof(result), " <= ", typeof(t), ")");
+  gdup(result, t);
+  return result;
+}
+
+void gdup(T1, T2)(ref T1 t1, const ref T2 t2) {
+  static assert(is(Unqual!(typeof(t1)) == typeof(t1)), 
+                "Must dup into mutable "~typeof(t1).stringof~
+                " <= "~typeof(t2).stringof);
+
+  static if(LogCompile) 
+    pragma(msg, 
+           "CT: gdup(t1,t2) prop on (", 
+           typeof(t1), " <= ", typeof(t2), ")");
+
+  static if(isBasicType!T1 || is(T1==enum)) {
+    static if(LogCompile) 
+      pragma(msg, "CT: ...T1 is basic type ", T1);
     t1 = t2;
-  } else static if(isDynamicArray!T1 && isArrayOfImmutable!T1) {
+  } else static if(isArrayOfImmutable!T1 && isArrayOfImmutable!T2) {
+    static if(LogCompile) 
+      pragma(msg, "CT: ...T1 is array of immutable ", T1, " as is t2 ", T2);
     t1 = t2.idup;
   } else static if(isDynamicArray!T1) {
-    t1 = t2.dup;
-  } else static if(isAssociativeArray!T1) {
-      alias KeyType!(T1) AAKeyType;
-      alias ValueType!(T1) AAValueType;
-      alias Unqual!(AAValueType)[Unqual!(AAKeyType)] NoConstAssocArr;
-      t1.clear();
-      foreach(k, v2; t2) {
-        AAValueType v1;
-        gdup(v1, v2);
-        t1[k] = v1;
+    static if(hasAliasing!(ArrayElementType!T1)) {
+      static if(LogCompile) 
+        pragma(msg, "CT: ...T1 is array mutable ", T1);
+      // If gdup is being called from postblit then t1 is t2 and we need
+      // to have a fresh temp to copy into
+      typeof(t1) temp;
+      bool isPostBlit = (t1 is t2);
+      typeof(t1) *bestChoice = isPostBlit? &temp : &t1;
+      (*bestChoice).clear();
+      foreach(ref val2; t2) {
+        Unqual!(ArrayElementType!T1) val1;
+        opDupPreferred(val1, val2);
+        (*bestChoice) ~= val1;
       }
+      if(isPostBlit) {
+        swap(t1, temp);
+      }
+    } else {
+      static if(LogCompile) 
+        pragma(msg, "CT: ...T1 is array of type with no aliasing ", T1);
+      t1 = t2.dup;
+    }
+  } else static if(isAssociativeArray!T1) {
+    static if(LogCompile) 
+      pragma(msg, "CT: ...T1 is assoc array ", T1, 
+             " w value type ", ValueType!T1, " aka ", typeof(t1));
+
+    alias KeyType!(T1) AAKeyType;
+    alias ValueType!(T1) AAValueType;
+    alias DeepUnqual!(AAValueType)[DeepUnqual!(AAKeyType)] NoConstAssocArr;
+    typeof(t1) temp;
+    bool isPostBlit = ((cast(DeepUnqual!T1)t1) is (cast(DeepUnqual!T2)t2));
+    typeof(t1) *bestChoice = isPostBlit? &temp : &t1;
+    if(!isPostBlit) (*bestChoice).clear();
+    foreach(k, ref v2; cast(DeepUnqual!(typeof(t2)))t2) {
+      AAValueType v1;
+      opDupPreferred(v1, v2);
+      (*bestChoice)[k] = v1;
+    }
+    if(isPostBlit) {
+      swap(t1, temp);
+    }
+    static if(LogCompile) pragma(msg, "CT: ...T1 done assoc array ", T1);
   } else static if(is(T1==struct)) {
+    static if(LogCompile) pragma(msg, "CT: ...T1 is struct ", T1);
+    Unqual!(typeof(t1)) temp;
+    bool isPostBlit = ((cast(DeepUnqual!T1)t1) is (cast(DeepUnqual!T2)t2));
+    typeof(t1) *bestChoice = isPostBlit? &temp : &t1;
     foreach (i, ignore ; typeof(T1.tupleof)) {
       static if(T1.tupleof[i].stringof.endsWith(".this")) {
         static assert(0, "no dup of nested non static structs!");
       }
-      gdup(t1.tupleof[i], t2.tupleof[i]);
+      static if(LogCompile) 
+        pragma(msg, "CT: .....dupping field ", t2.tupleof[i].stringof);
+      opDupPreferred((*bestChoice).tupleof[i], t2.tupleof[i]);
+    }
+    if(isPostBlit) {
+      swap(t1, temp);
     }
   } else static if(isPointer!T1) {
+    static if(LogCompile) pragma(msg, "CT: ...T1 is pointer ", T1);
     alias Unqual!(PointerTarget!T1) Target;
     if(t2) {
       static if(__traits(compiles, (t1 = new Target))) {
         t1 = new Target;
-        gdup(*t1, *t2); 
+        opDupPreferred(*t1, *t2); 
       } else {
         static assert(0, "gdup will not work with "~
                       Target.stringof~
@@ -299,12 +355,13 @@ void gdup(T1, T2)(ref T1 t1, ref T2 t2) {
       }
     }
   } else static if(is(T1==class)) {
+    static if(LogCompile) 
+      pragma(msg, "CT: ...T1 is a class else entirely ", T1);
     static assert(0, "Class gdup not supported, requested type "~T);
   } else {
-    t1 = t2;
+    static assert(0, "Missing gdup support for "~T1);
   }
 }
-
 
 /** Compare for equality all fields in a class
     Original courtesy of Tobias Pankrath
@@ -312,84 +369,104 @@ void gdup(T1, T2)(ref T1 t1, ref T2 t2) {
     Supports associative and dynamic arrays
     Treats default float.init as equal
  */
-bool typesDeepEqual(T,F)(auto ref T lhs, auto ref F rhs) if(is(Unqual!T == Unqual!F)) {
-    mixin(LogInfo("typesDeepEqual by ref ", "T", "lhs"));
-    bool result = true;
+bool typesDeepEqual(T,F)(auto ref T lhs, auto ref F rhs) 
+  if(is(Unqual!T == Unqual!F)) {
+  mixin(LogInfo("typesDeepEqual by ref ", "T", "lhs"));
+  bool result = true;
 
-    if(lhs is rhs) { return true; }
+  if(lhs is rhs) { return true; }
 
-    static if(isFloatingPoint!(T)) {
-      mixin(LogInfo("...typesDeepEqual floating ", "T", "lhs"));
-      if(!isnan(lhs) || !isnan(rhs)) {
-          result &= lhs == rhs;  
-      }
-      // both nan, assume equal - maybe should make configurable
-    } else static if(isPointer!(T)) {
-      mixin(LogInfo("...typesDeepEqual pointer ", "T", "lhs"));
-      if(lhs && rhs) {
-        result &= typesDeepEqual(*lhs, *rhs);
-      } else {
-        result = !(lhs || rhs);
-      }
-    } else static if(isAssociativeArray!(T)) {
-      mixin(LogInfo("...typesDeepEqual assoc array ", "T", "lhs"));
-
-      ///// TODO: Remove const casts on length and keys when no longer
-      ///// necessary. Note: important to cast away const on both key and
-      ///// value.
-      alias KeyType!(T) AAKeyType;
-      alias ValueType!(T) AAValueType;
-      alias Unqual!(AAValueType)[Unqual!(AAKeyType)] NoConstAssocArr;
-      if((cast(NoConstAssocArr)lhs).length != (cast(NoConstAssocArr)rhs).length) return false;
-      auto lhsKeys = (cast(NoConstAssocArr)lhs).keys.dup;
-      auto rhsKeys = (cast(NoConstAssocArr)rhs).keys.dup;
-
-      lhsKeys.sort;
-      rhsKeys.sort;
-      for(size_t i=0; i<lhsKeys.length; ++i) {
-          if(!typesDeepEqual(lhsKeys[i], rhsKeys[i])) return false;
-          const(AAValueType)* lvalue = lhsKeys[i] in lhs;
-          const(AAValueType)* rvalue = rhsKeys[i] in rhs;
-          if(!((lvalue && rvalue)? typesDeepEqual(*lvalue, *rvalue) : lvalue == rvalue)) return false;
-      }
-    } else static if(isDynamicArray!(T)) {
-      mixin(LogInfo("...typesDeepEqual dynamic array ", "T", "lhs"));
-      auto llen = lhs.length, rlen = rhs.length;
-      auto end = min(llen, rlen);
-      for(size_t i=0; i<end; ++i) {
-        if(!typesDeepEqual(lhs[i], rhs[i])) return false;
-      }
-      result = llen == rlen;
-    } else static if(is(T == struct)) {
-      mixin(LogInfo("...typesDeepEqual struct ", "T", "lhs"));
-      foreach (i, ignore ; typeof(T.tupleof)) {
-        mixin(LogInfo("struct field <"~lhs.tupleof[i].stringof~">", "T.tupleof[i]", "lhs.tupleof[i]"));
-        alias typeof(T.tupleof[i]) FieldType;
-        static if(T.tupleof[i].stringof.endsWith(".this")) {
-          // Skip if nested class
-        } else {
-          // Special case pointed out by Tobias
-          static if(isPointer!FieldType && is(PointerTarget!FieldType == T)) {
-            auto l = lhs.tupleof[i];
-            auto r = rhs.tupleof[i];
-            if((l && ((*l).tupleof[i] == rhs.tupleof[i])) &&
-               (r && ((*r).tupleof[i] == lhs.tupleof[i]))) {
-              // let it ride
-            } else {
-              result &= typesDeepEqual(l, r);
-            }
-          } else {
-            result &= typesDeepEqual(lhs.tupleof[i], rhs.tupleof[i]);
-          }
-        }
-        if(!result) return false;
-      }
-    } else {
-      mixin(LogInfo("...typesDeepEqual catch-all ", "T", "lhs"));
-      result = lhs == rhs;
+  static if(isFloatingPoint!(T)) {
+    mixin(LogInfo("...typesDeepEqual floating ", "T", "lhs"));
+    if(!isnan(lhs) || !isnan(rhs)) {
+        result &= lhs == rhs;  
     }
-    return result;
+    // both nan, assume equal - maybe should make configurable
+  } else static if(isPointer!(T)) {
+    mixin(LogInfo("...typesDeepEqual pointer ", "T", "lhs"));
+    if(lhs && rhs) {
+      result &= typesDeepEqual(*lhs, *rhs);
+    } else {
+      result = !(lhs || rhs);
+    }
+  } else static if(isAssociativeArray!(T)) {
+    mixin(LogInfo("...typesDeepEqual assoc array ", "T", "lhs"));
+
+    ///// TODO: Remove const casts on length and keys when no longer
+    ///// necessary. Note: important to cast away const on both key and
+    ///// value.
+    alias KeyType!(T) AAKeyType;
+    alias ValueType!(T) AAValueType;
+    alias Unqual!(AAValueType)[Unqual!(AAKeyType)] NoConstAssocArr;
+    if((cast(NoConstAssocArr)lhs).length != (cast(NoConstAssocArr)rhs).length) return false;
+    auto lhsKeys = (cast(NoConstAssocArr)lhs).keys.dup;
+    auto rhsKeys = (cast(NoConstAssocArr)rhs).keys.dup;
+
+    lhsKeys.sort;
+    rhsKeys.sort;
+    for(size_t i=0; i<lhsKeys.length; ++i) {
+        if(!typesDeepEqual(lhsKeys[i], rhsKeys[i])) return false;
+        const(AAValueType)* lvalue = lhsKeys[i] in lhs;
+        const(AAValueType)* rvalue = rhsKeys[i] in rhs;
+        if(!((lvalue && rvalue)? typesDeepEqual(*lvalue, *rvalue) : lvalue == rvalue)) return false;
+    }
+  } else static if(isDynamicArray!(T)) {
+    mixin(LogInfo("...typesDeepEqual dynamic array ", "T", "lhs"));
+    auto llen = lhs.length, rlen = rhs.length;
+    auto end = min(llen, rlen);
+    for(size_t i=0; i<end; ++i) {
+      if(!typesDeepEqual(lhs[i], rhs[i])) return false;
+    }
+    result = llen == rlen;
+  } else static if(is(T == struct)) {
+    mixin(LogInfo("...typesDeepEqual struct ", "T", "lhs"));
+    foreach (i, ignore ; typeof(T.tupleof)) {
+      mixin(LogInfo("struct field <"~lhs.tupleof[i].stringof~">", "T.tupleof[i]", "lhs.tupleof[i]"));
+      alias typeof(T.tupleof[i]) FieldType;
+      static if(T.tupleof[i].stringof.endsWith(".this")) {
+        // Skip if nested class
+      } else {
+        // Special case pointed out by Tobias
+        static if(isPointer!FieldType && is(PointerTarget!FieldType == T)) {
+          auto l = lhs.tupleof[i];
+          auto r = rhs.tupleof[i];
+          if((l && ((*l).tupleof[i] == rhs.tupleof[i])) &&
+             (r && ((*r).tupleof[i] == lhs.tupleof[i]))) {
+            // let it ride
+          } else {
+            result &= typesDeepEqual(l, r);
+          }
+        } else {
+          result &= typesDeepEqual(lhs.tupleof[i], rhs.tupleof[i]);
+        }
+      }
+      if(!result) return false;
+    }
+  } else {
+    mixin(LogInfo("...typesDeepEqual catch-all ", "T", "lhs"));
+    result = lhs == rhs;
   }
+  return result;
+}
+
+ref T opDupPreferred(T, F)(ref T target, const ref F src) 
+  if(is(DeepUnqual!T == DeepUnqual!F)) {
+  static if(LogCompile) 
+    pragma(msg, 
+           "CT: opDupPreferred on (", typeof(target), " <= ", typeof(src), ")");
+  static if(is(T==struct) && __traits(compiles, (src.dup))) {
+    static if(LogCompile) 
+      pragma(msg, 
+             "CT: ...Using ", 
+             typeof(src).stringof, ".dup for dup of ", typeof(src));
+    target = src.dup;
+  } else {
+    static if(LogCompile) 
+      pragma(msg, "CT: ...Using gdup for dup of ", typeof(src));
+    gdup(target, src);
+  }
+  return target;
+}
 
 int opCmpPreferred(T, F)(const ref T lhs, const ref F rhs) {
   static if(__traits(compiles, (lhs.opCmp(rhs)))) {
@@ -402,7 +479,8 @@ int opCmpPreferred(T, F)(const ref T lhs, const ref F rhs) {
 /** Compare all fields for suitable opCmp.
     Order will be that returned by T.tupleof
  */
-int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs) if(is(Unqual!T == Unqual!F)) {
+int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs) 
+  if(is(Unqual!T == Unqual!F)) {
 
   static if(isFloatingPoint!(T)) {
     if(isnan(lhs) && isnan(rhs)) { return 0; }
@@ -431,7 +509,8 @@ int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs) if(is(Unqual!T == Unqual!F
     ///// TODO: Remove const casts on keys
     // Compare keys in order
     alias Unqual!(ValueType!T)[Unqual!(KeyType!T)] NoConstAssocArr;
-    if((cast(NoConstAssocArr)lhs).length != (cast(NoConstAssocArr)rhs).length) return false;
+    if((cast(NoConstAssocArr)lhs).length != (cast(NoConstAssocArr)rhs).length) 
+      return false;
     auto lhsKeys = (cast(NoConstAssocArr)lhs).keys.dup;
     auto rhsKeys = (cast(NoConstAssocArr)rhs).keys.dup;
 
@@ -513,9 +592,13 @@ hash_t deepHash(T)(const ref T t) nothrow {
     result = result*prime + t;
   } else static if (isFloatingPoint!(T)) {
     mixin(LogInfo("Hashing floating point ", "T", "t"));
-    byte[T.sizeof] *buff = cast(byte[T.sizeof]*)&t;
-    for(size_t i=0; i<T.sizeof; ++i) {
-      result = result*prime + (*buff)[i];
+    if(isnan(t)) { 
+      result = result*prime + prime;
+    } else {
+      byte[T.sizeof] *buff = cast(byte[T.sizeof]*)&t;
+      for(size_t i=0; i<T.sizeof; ++i) {
+        result = result*prime + (*buff)[i];
+      }
     }
   } else static if (is(T == struct) || is(T == class)) {
     mixin(LogInfo("Hashing struct ", "T", "t"));
@@ -542,6 +625,8 @@ template DeepUnqual(T) {
     alias Unqual!(Unqual!(ValueType!T)[Unqual!(KeyType!T)]) DeepUnqual;    
   } else static if(isDynamicArray!T) {
     alias Unqual!(Unqual!(ArrayElementType!T)[]) DeepUnqual;
+  } else static if(isPointer!T) {
+    alias Unqual!(PointerTarget!T) * DeepUnqual;
   } else {
     alias Unqual!T DeepUnqual;
   }
@@ -555,8 +640,18 @@ template HasDup(T) {
   enum HasDup = __traits(hasMember, T, "dup"); 
 }
 
+template isArrayOfNonMutable(T) {
+  static if(isDynamicArray!T && 
+            (is(ArrayElementType!T == const) ||
+             is(ArrayElementType!T == immutable))) {
+    enum isArrayOfImmutable = true;
+  } else {
+    enum isArrayOfImmutable = false;
+  }
+}
+
 template isArrayOfImmutable(T) {
-  static if(isDynamicArray!T && !isMutable!(ArrayElementType!T)) {
+  static if(isDynamicArray!T && is(ArrayElementType!T == immutable)) {
     enum isArrayOfImmutable = true;
   } else {
     enum isArrayOfImmutable = false;
@@ -599,6 +694,7 @@ unittest {
   struct WrappedHashDeep { 
     mixin(HashSupport);
     mixin(PostBlit);
+    mixin(Dup);
     private {
       int[string] _m;
       string _s = "s";
@@ -615,6 +711,7 @@ unittest {
   */
   struct PostBlitExample { 
     mixin(Deep);
+    mixin(Dup);
     private {
       int[string] _m;
       char[] _c;
@@ -824,7 +921,7 @@ unittest {
         bt1.tupleof[i] = "beta";
         equalHashSanity(bt1, bt2);
     } else {
-      pragma(msg, "Deal with ", BasicTypes.tupleof[i]);
+      static assert(false, "CT: Deal with "~BasicTypes.tupleof[i]);
     }
   }
 
