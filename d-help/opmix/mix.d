@@ -33,8 +33,6 @@ import std.algorithm;
 import std.math;
 import std.string;
 import std.traits;
-import std.stdio;
-import pprint.pp;
 
 /**
    Set this to true to see postblits
@@ -121,7 +119,7 @@ const string Deep = `
    mixin(DeepSemantics) wich includes mixin(PostBlit) and mixin(OpEquals).
 */
 const string PostBlit = `
-  this(this) {
+this(this) {
     alias typeof(this) T;
     foreach (i, field ; typeof(T.tupleof)) {
       alias typeof(T.tupleof[i]) FieldType;
@@ -194,6 +192,8 @@ const string HashSupport = `
 `;
 
 
+// custom <dmodule mix public_section>
+
 static if(LogRunTime) { 
   import std.stdio; 
 }
@@ -224,8 +224,18 @@ string LogInfo(string tag, string T, string instance) {
 
 /** Discriminates a pass type by its size
  */
+template PrefersPassByRef(T) {
+  static if(T.sizeof > 16 || hasAliasing!T) {
+    enum PrefersPassByRef = true;
+  } else {
+    enum PrefersPassByRef = false;
+  }
+}
+
+/** Discriminates a pass type by its size
+ */
 template PreferredPassType(T) {
-  static if(T.sizeof > 16) {
+  static if(PrefersPassByRef!T) {
     enum PreferredPassType = `const ref `~T.stringof;
   } else {
     enum PreferredPassType = T.stringof;
@@ -238,12 +248,22 @@ template PreferredPassType(T) {
 template ReadOnly(alias name) {
   enum v = name.stringof;
   enum p = name.stringof[1..$];
-  enum ReadOnly = `
+  enum prefersReference = PrefersPassByRef!(typeof(name));
+  static if(prefersReference) {
+    enum ReadOnly = `
 public @property auto `~p~`() const { 
   debug writeln("Reading ", `~v~`);
   return `~v~`; 
 }
 `;
+  } else {
+    enum ReadOnly = `
+public @property ref auto `~p~`() const { 
+  debug writeln("Reading ", `~v~`);
+  return `~v~`; 
+}
+`;
+  }
 }
 
 /** Provides mixin for the *read* accessor when making a field read/write.
@@ -316,6 +336,11 @@ void gdup(T1, T2)(ref T1 t1, const ref T2 t2) {
     bool isPostBlit = ((cast(DeepUnqual!T1)t1) is (cast(DeepUnqual!T2)t2));
     typeof(t1) *bestChoice = isPostBlit? &temp : &t1;
     if(!isPostBlit) (*bestChoice).clear();
+    // NOTE: k here *is* copied with postblit, which is a shame. It would be
+    // better if the foreach would be like
+    // foreach(ref const(K) k, ref V v2; ...)
+    // foreach(ref const(K) k, ref const(V) v2; ...)
+    // per the user's choosing
     foreach(k, ref v2; cast(DeepUnqual!(typeof(t2)))t2) {
       AAValueType v1;
       opDupPreferred(v1, v2);
@@ -328,7 +353,7 @@ void gdup(T1, T2)(ref T1 t1, const ref T2 t2) {
   } else static if(is(T1==struct)) {
     static if(LogCompile) pragma(msg, "CT: ...T1 is struct ", T1);
     Unqual!(typeof(t1)) temp;
-    bool isPostBlit = ((cast(DeepUnqual!T1)t1) is (cast(DeepUnqual!T2)t2));
+    bool isPostBlit = t1 is t2;
     typeof(t1) *bestChoice = isPostBlit? &temp : &t1;
     foreach (i, ignore ; typeof(T1.tupleof)) {
       static if(T1.tupleof[i].stringof.endsWith(".this")) {
@@ -509,10 +534,9 @@ int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs)
     ///// TODO: Remove const casts on keys
     // Compare keys in order
     alias Unqual!(ValueType!T)[Unqual!(KeyType!T)] NoConstAssocArr;
-    if((cast(NoConstAssocArr)lhs).length != (cast(NoConstAssocArr)rhs).length) 
-      return false;
     auto lhsKeys = (cast(NoConstAssocArr)lhs).keys.dup;
     auto rhsKeys = (cast(NoConstAssocArr)rhs).keys.dup;
+    if(lhsKeys.length != rhsKeys.length) return false;
 
     lhsKeys.sort;
     rhsKeys.sort;
@@ -539,7 +563,6 @@ int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs)
     return (lhs < rhs)? -1 : (lhs > rhs)? 1 : 0;
   }
 }
-
 
 hash_t toHashPreferred(T)(const ref T t) nothrow {
   static if(is(T==struct) && __traits(compiles, (t.toHash()))) {
@@ -666,363 +689,7 @@ template IsImmutable(T) {
   }
 }
 
-
-
-// custom <dmodule mix public_section>
 // end <dmodule mix public_section>
-
-
-unittest { 
-  /**
-     Usage of basic associative array in struct.  Hash support is irrespective of
-     copy semantics.  This class, mixing in Dup and not PostBlit has reference
-     semantics.
-  */
-  struct WrappedHash { 
-    mixin(HashSupport);
-    mixin(Dup);
-    private {
-      int[string] _m;
-      string _s = "s";
-    }
-  }
-
-  /**
-     Similar to above, but with deep semantics (mixin(PostBlit)) causing
-     immutable(T)[] to be shallow copied since its safe.
-  */
-  struct WrappedHashDeep { 
-    mixin(HashSupport);
-    mixin(PostBlit);
-    mixin(Dup);
-    private {
-      int[string] _m;
-      string _s = "s";
-      char[] _ca;
-    }
-  }
-
-  /**
-     Usage of post blit for struct.
-
-     By including Deep, PostBlit is pulled in and this(this) is suitably defined to
-     dup all that are dupable. Additionally OpEquals is pulled so instances can be
-     deep compared.
-  */
-  struct PostBlitExample { 
-    mixin(Deep);
-    mixin(Dup);
-    private {
-      int[string] _m;
-      char[] _c;
-      string _s = "s";
-      const(WrappedHash)[] _wh;
-    }
-  }
-
-  /**
-     Struct with most basic types (missing [i|c][float|double|real])
-  */
-  struct BasicTypes { 
-    mixin(HashSupport);
-    mixin(Dup);
-    private {
-      bool _bool;
-      byte _byte;
-      ubyte _ubyte;
-      short _short;
-      ushort _ushort;
-      int _int;
-      uint _uint;
-      long _long;
-      ulong _ulong;
-      float _float;
-      double _double;
-      real _real;
-      char _char;
-      wchar _wchar;
-      dchar _dchar;
-      string _string;
-    }
-  }
-
-  /**
-     One grabs the other, the other grabs the one - was causing infinite loop
-  */
-  struct PartGrabbers { 
-    alias PartGrabbers* PartGrabbersPtr;
-    mixin(HashSupport);
-    PartGrabbersPtr other;
-    int extra = 3;
-  }
-
-  /**
-     Top level class with nested classes for testing HashSupport(OpCmp and OpEquals) and Dup.
-  */
-  struct A { 
-    alias string[string] SSAArr;
-    alias B[B] BBAArr;
-    alias int* IntPtr;
-    alias B* BPtr;
-    mixin(HashSupport);
-    mixin(Dup);
-    struct B { 
-      mixin(HashSupport);
-      mixin(Dup);
-      private {
-        char[] _bw;
-        string _bx = "foo";
-        int _by = 3;
-        string _bz = "zoo";
-      }
-    }
-
-    private {
-      char[] _w;
-      string _x = "foo";
-      int _y = 3;
-      string _z = "zoo";
-      B _b;
-      SSAArr _map;
-      BBAArr _bMap;
-      BPtr _bPtr;
-      IntPtr _intPtr;
-    }
-  }
-
-// custom <dmodule mix unittest>
-
-  import std.stdio;
-
-  // Default equality comparison of associative arrays is not deep. The
-  // following illustrates the issue when types are not wrapped. If deep
-  // semantics existed, the expression would always be false. For me this
-  // expression is true. It is left commented out in case I am just lucky.
-
-  // assert((["fo".idup:2] < ["fo".idup:3]) == (["fo".idup:3] < ["fo".idup:2]));
-
-  auto z1 = ["fo".idup:2], z2 = ["fo".idup:2];
-  // typesDeepCmp(auto ref T...) signature required for literals
-  assert(typesDeepEqual(["fo".idup:2], ["fo".idup:2]));
-  assert(typesDeepEqual(z1,z2));
-
-  {
-    // Expensive for hashes: opCmp compares keys/values ordered - so wrapping in
-    // struct and adding HashSupport brings in OpCmp, OpEquals and ToHash
-    assert(WrappedHash(["fo".idup:2]) == WrappedHash(["fo".idup:2]));
-    assert(WrappedHash(["fo".idup:2]) < WrappedHash(["fo".idup:3]));
-    assert(WrappedHash(["fo".idup:3]) > WrappedHash(["fo".idup:2]));
-    assert(!(WrappedHash(["fo".idup:3]) < WrappedHash(["fo".idup:3])));
-    assert(!(WrappedHash(["fo".idup:3]) > WrappedHash(["fo".idup:3])));
-    assert(WrappedHash(["fo".idup:3]) !in [ WrappedHash(["fo".idup:2]) : 3 ]);
-    assert(WrappedHash(["fo".idup:3]) in [ WrappedHash(["fo".idup:3]) : 3 ]);
-    auto wh = WrappedHash(["test".idup:4]);
-    assert((wh == wh.dup) && (wh.toHash() && (wh.toHash() == wh.dup.toHash())));
-    auto wh2 = wh;
-  }
-
-  {
-    /// Demonstrate bypassing '==', using typesDeepEqual instead.
-    WrappedHash wh1, wh2;
-    // unwrapped hashes
-    WrappedHash[string] uwh1, uwh2;
-    // unwarpped hashes of unwrapped hashes
-    WrappedHash[WrappedHash[string]] uwhuwh1, uwhuwh2;
-    // As established, here these are equal purely out of luck - because empty
-    assert(wh1==wh2);
-    assert(uwh1==uwh2);
-    assert(uwhuwh1==uwhuwh2);
-    uwhuwh1[uwh1.dup] = wh1.dup;
-    uwhuwh2[uwh1.dup] = wh2.dup;
-  }
-
-  {
-    auto arr = ["fo":2];
-    WrappedHashDeep wh1 = {arr, "somestring"};
-    wh1._ca = [ 'a', 'b', 'c'];
-    WrappedHashDeep wh2 = wh1;
-    // Since _s is immutable(T)[] it is shallow copied
-    assert(wh1._s.ptr == wh2._s.ptr);
-    // Since _ca is mutable T[] it is deep copied
-    assert(wh1._ca.ptr != wh2._ca.ptr);
-    // And yet
-    assert(wh1==wh2);
-    wh1._ca[2] = 'd';
-    assert(wh1 > wh2);
-    assert(wh2 < wh1);
-    wh2._ca[2] = 'd';
-    assert(!(wh1 < wh2));
-    assert(!(wh2 < wh1));
-    assert(wh1 in [ wh2 : 3 ]);
-    wh1._ca[2] = 'e';
-    assert(wh1 !in [ wh2 : 3 ]);
-  }
-
-  {
-    PostBlitExample ex1;
-    auto arr = ["fo":2];
-    ex1._m["foo".idup] = 42;
-    ex1._s = "this is a test".idup;
-    ex1._c = ['a','b','c'];
-    const(WrappedHash) cwh = {arr, "goo"};
-    ex1._wh ~= cwh;
-    PostBlitExample ex2 = ex1;
-    // they are deep equal
-    assert(ex1 == ex2);
-    // they are sharing arrays of immutable, but that is ok
-    assert(ex1._s.ptr == ex2._s.ptr);
-    // they are not sharing arrays
-    assert(ex1._c.ptr != ex2._c.ptr);
-    ex1._m["foo"]++;
-    assert(ex1._m != ex2._m);
-  }
-
-  void equalHashSanity(T)(const ref T lhs, const ref T rhs) {
-    assert(lhs == rhs);    
-    assert(!(lhs<rhs));
-    assert(!(rhs>lhs));
-    auto h1 = lhs.toHash();
-    assert(h1);
-    assert(h1 == lhs.dup.toHash());
-    assert(h1 == rhs.toHash());
-  }
-
-  BasicTypes bt1, bt2;
-  equalHashSanity(bt1, bt2);
-  foreach (i, ignore ; typeof(BasicTypes.tupleof)) {
-    static if(isNumeric!(typeof(BasicTypes.tupleof[i]))) {
-      static if(isFloatingPoint!(typeof(BasicTypes.tupleof[i]))) {
-        bt1.tupleof[i] = bt2.tupleof[i] = 3;
-      }
-      bt2.tupleof[i]++;
-      assert(bt1.toHash() != bt2.toHash());
-      assert(bt1<bt2);
-      assert(bt2>bt1);
-      bt2.tupleof[i]--;
-      equalHashSanity(bt1, bt2);
-    } else static if(isSomeChar!(typeof(BasicTypes.tupleof[i]))) {
-        bt1.tupleof[i] = 'a';
-        bt2.tupleof[i] = 'b';
-        assert(bt1<bt2);
-        assert(bt2>bt1);
-        bt2.tupleof[i] = 'a';
-        equalHashSanity(bt1, bt2);
-    } else static if(isBoolean!(typeof(BasicTypes.tupleof[i]))) {
-        bt2.tupleof[i] = true;
-        assert(bt1<bt2);
-        assert(bt2>bt1);
-        bt1.tupleof[i] = true;
-        equalHashSanity(bt1, bt2);
-    } else static if(isSomeString!(typeof(BasicTypes.tupleof[i]))) {
-        bt1.tupleof[i] = "alpha";
-        bt2.tupleof[i] = "beta";
-        assert(bt1<bt2);
-        assert(bt2>bt1);
-        bt1.tupleof[i] = "beta";
-        equalHashSanity(bt1, bt2);
-    } else {
-      static assert(false, "CT: Deal with "~BasicTypes.tupleof[i]);
-    }
-  }
-
-  // Create s.t. a==b and a!=c
-  auto ss1 = [ "grape".idup : "vine".idup ];
-  auto ss2 = [ "grape".idup : "vine".idup ];
-  A a, b, c = { _w : ['a','b'], _x : "goo".idup, _map : ss1 };
-  // Copy same string different address keeping a==b
-  b._x = "foo".idup;
-
-  assert(a.toHash() && (a.toHash() == a.dup.toHash()));
-
-  // Similar for const objects
-  const(A) ca, cb, cc = { _w : ['a','b'], _x : "goo".idup, _map : ss2 };
-
-  // without opEquals deep equality compare will fail until 3789 fixed
-  equalHashSanity(a, b);
-  equalHashSanity(ca, cb);
-
-  assert((a == b) && (a != c) && (ca == cb) && 
-         (ca != cc) && (a == ca) && (a != cc));
-  assert(!(a < b) && !(b < a) && (a < c) && !(c < a));
-  assert(!(a < cb) && !(cb < a) && (a < cc) && !(c < ca));
-
-  // Now patch a and c to b equal
-  a._map["grape"] = "vine";
-  a._w = ['a','b'];
-  c._x = "foo";
-  assert(a == c);
-  // Clear a to be back like b
-  a._map.clear();
-  a._w.clear();
-  assert(a == b);
-
-  // Change nested B's y and ensure difference picked up and cmp catches it correctly
-  a._b._by++;
-  assert((a != b) && (b != a));
-  assert((b < a) && !(b > a));
-
-  a._b._by--;
-  assert(a==b);
-  a._bPtr = new A.B;
-  assert(a != b);
-  // For opCmp - one with vs one without, smaller without
-  assert(b < a);
-  b._bPtr = new A.B;
-  assert(a==b);
-  b._bMap[a._b.dup] = a._b.dup;
-  assert(a!=b);
-  a._bMap[a._b.dup] = a._b.dup;
-  assert(a==b);
-  a._intPtr = new int;
-  *a._intPtr = 42;
-  assert(a!=b);
-  b._intPtr = new int;
-  *b._intPtr = 20+22;
-  assert(a==b);
-
-  A dup = a.dup;
-  assert(dup == a);
-  assert(dup._bPtr != a._bPtr && *dup._bPtr == *a._bPtr);
-
-  // Series of changes on one or the other to ensure picked up by equals
-  dup._b._bx = "not foo";
-  assert(dup != a);
-  dup = a.dup;
-  assert(dup == a);
-  dup._b._bx = "foo";
-  assert(dup == a);
-
-  // Change some of duped and ensure different
-  dup._b._bw = [ 'a', 'b', 'c' ];
-  assert(dup != a);
-  dup._b._bw = a._b._bw;
-  assert(dup == a);
-  dup._bPtr._bw = [ 'd', 'e', 'f' ];
-  assert(dup != a);
-
-  auto idup = a.idup;
-  dup = a.dup;
-  assert((idup == a) && (idup == dup));
-  assert(IsImmutable!(typeof(idup)) && !IsImmutable!(typeof(dup)));
-  assert(a.dup.idup == a.idup.dup);
-
-  PartGrabbers pg1, pg2;
-  pg1.other = &pg2;
-  pg2.other = &pg1;
-  assert(pg1 == pg2);
-  pg1.extra++;
-  assert(pg1 != pg2);
-  pg2.extra++;
-  assert(pg1 == pg2);  
-  assert(typesDeepEqual(pg1, pg2));
-  pg2.other = null;
-  assert(!typesDeepEqual(pg1, pg2));
-  pg1.other = null;
-  assert(typesDeepEqual(pg1, pg2));
-  writeln("Done unittest mix");
-
-// end <dmodule mix unittest>
-}
 
 /**
    License: <a href="http://www.boost.org/LICENSE_1_0.txt">Boost License 1.0</a>.
