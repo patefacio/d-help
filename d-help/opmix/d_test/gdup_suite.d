@@ -72,6 +72,9 @@ class CustomDupCalled {
 
   static struct C { 
     B b;
+    
+// custom <dstruct c public_section>
+// end <dstruct c public_section>
   }
 
 
@@ -80,6 +83,7 @@ class CustomDupCalled {
 // custom <custom_dup_calledtest_custom_dup_called>
 
     const(C) c = C(B(A(['a'])));
+    A.dupHasBeenCalled = B.dupHasBeenCalled = false;
     C c2 = c.gdup;
     assert(0==typesDeepCmp(c,c2));
     assertNotEquals(c.b.a.c.ptr, c2.b.a.c.ptr);

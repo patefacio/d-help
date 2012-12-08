@@ -11,13 +11,18 @@ import std.traits;
 class HashSupportTest { 
   mixin TestMixin;
   /**
-     Usage of basic associative array in struct.  Hash support is irrespective of
-     copy semantics.  This class, mixing in Dup and not PostBlit has reference
-     semantics.
+     Usage of basic associative array in struct.  Hash support is
+     irrespective of copy semantics.  This class, mixing in Dup and not
+     PostBlit has reference semantics.
   */
   static struct WrappedHash { 
     mixin(HashSupport);
     mixin(Dup);
+    
+
+// custom <dstruct wrapped_hash public_section>
+// end <dstruct wrapped_hash public_section>
+
     private {
       int[string] _m;
       string _s = "s";
@@ -67,10 +72,15 @@ class HashSupportTest {
     assertEquals(uwhuwh1,uwhuwh2);
     uwhuwh1[uwh1.dup] = wh1.dup;
     uwhuwh2[uwh1.dup] = wh2.dup;
-    // Since no postblit, they are not equal with '=='
-    assertNotEquals(uwhuwh1, uwhuwh2);
     // The are deep equal when using the global function
     assert(typesDeepEqual(uwhuwh2, uwhuwh1));
+
+    // Since no postblit, they are not equal with '==' 
+
+    // This used to assert just fine, but they have improved hash comparison
+    // to actually do deep compare - or rather to use your opEquals on values
+    // if you have defined one.
+    // assert(uwhuwh1 != uwhuwh2);
 
 // end <hash_support_testtest_types_deep_equal>
   }
@@ -86,6 +96,10 @@ class HashDeepSemantics {
     mixin(HashSupport);
     mixin(PostBlit);
     mixin(Dup);
+    
+// custom <dstruct wrapped_hash_deep public_section>
+// end <dstruct wrapped_hash_deep public_section>
+
     private {
       int[string] _m;
       string _s = "s";
@@ -127,6 +141,11 @@ class PostBlitDeepSemantics {
   static struct WrappedHash { 
     mixin(HashSupport);
     mixin(Dup);
+    
+
+// custom <dstruct wrapped_hash public_section>
+// end <dstruct wrapped_hash public_section>
+
     private {
       int[string] _m;
       string _s = "s";
@@ -136,13 +155,17 @@ class PostBlitDeepSemantics {
   /**
      Usage of post blit for struct.
 
-     By including Deep, PostBlit is pulled in and this(this) is suitably defined to
-     dup all that are dupable. Additionally OpEquals is pulled so instances can be
-     deep compared.
+     By including Deep, PostBlit is pulled in and this(this) is suitably
+     defined to dup all that are dupable. Additionally OpEquals is
+     pulled so instances can be deep compared.
   */
   static struct PostBlitExample { 
     mixin(Deep);
     mixin(Dup);
+    
+// custom <dstruct post_blit_example public_section>
+// end <dstruct post_blit_example public_section>
+
     private {
       int[string] _m;
       char[] _c;
@@ -185,6 +208,10 @@ class BasicTypeCoverage {
   static struct BasicTypes { 
     mixin(HashSupport);
     mixin(Dup);
+    
+// custom <dstruct basic_types public_section>
+// end <dstruct basic_types public_section>
+
     private {
       bool _bool;
       byte _byte;
@@ -258,10 +285,13 @@ class InfinniteLoop {
      One grabs the other, the other grabs the one - was causing infinite loop
   */
   struct PartGrabbers { 
-    alias PartGrabbers* PartGrabbersPtr;
     mixin(HashSupport);
+    alias PartGrabbers* PartGrabbersPtr;
     PartGrabbersPtr other;
     int extra = 3;
+    
+// custom <dstruct part_grabbers public_section>
+// end <dstruct part_grabbers public_section>
   }
 
 
@@ -293,15 +323,19 @@ class HeavyNesting {
      Top level class with nested classes for testing HashSupport(OpCmp and OpEquals) and Dup.
   */
   struct A { 
+    mixin(HashSupport);
+    mixin(Dup);
     alias string[string] SSMap;
     alias B[B] BBMap;
     alias int* IntPtr;
     alias B* BPtr;
-    mixin(HashSupport);
-    mixin(Dup);
     struct B { 
       mixin(HashSupport);
       mixin(Dup);
+      
+// custom <dstruct b public_section>
+// end <dstruct b public_section>
+
       private {
         char[] _bw;
         string _bx = "foo";
@@ -309,6 +343,10 @@ class HeavyNesting {
         string _bz = "zoo";
       }
     }
+
+    
+// custom <dstruct a public_section>
+// end <dstruct a public_section>
 
     private {
       char[] _w;
