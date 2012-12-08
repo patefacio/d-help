@@ -35,21 +35,11 @@ import std.string;
 import std.traits;
 
 /**
-   Set this to true to see postblits
-*/
-const bool LogPostblit = false;
-
-/**
    Set this to true to see what is going on at compile time
 */
-const bool LogCompile = false;
+const(bool) LogCompile = false;
 
-/**
-   Set this to true to see what is going on at runtime - potentially expensive!
-*/
-const bool LogRunTime = false;
-
-const string OpEquals = `
+const(string) OpEquals = `
 bool opEquals(const ref typeof(this) other) const {
   mixin(LogInfo("opEquals by ref ", "typeof(this)", "this"));
   return typesDeepEqual(this, other);
@@ -63,11 +53,11 @@ bool opEquals(const typeof(this) other) const {
 ;
 
 /**
-   Mixin to provide reasonable opCmp. It deeply compares the fields of the struct
-   and assumes member structs have suitable opCmp. Use this, for example, to
-   enable storing instances in a RedBlackTree.
+   Mixin to provide reasonable opCmp. It deeply compares the fields of
+   the struct and assumes member structs have suitable opCmp. Use
+   this, for example, to enable storing instances in a RedBlackTree.
 */
-const string OpCmp = `
+const(string) OpCmp = `
 int opCmp(const ref typeof(this) other) const {
   return typesDeepCmp(this, other);
 }
@@ -79,14 +69,14 @@ int opCmp(const typeof(this) other) const {
 ;
 
 /**
-   Mixin to provide a reasonable dup. dup is not really part of the language but
-   rather a convention used to copy items that have aliasing/sharing. For
-   example, dynamic arrays, associative, BitArray, HTTP have dup defined since a
-   basic assignment of them introduces sharing. So if you want your class to have
-   aliasing but still want an out mixin(Dup) and don't bother with
-   mixin(PostBlit).
+   Mixin to provide a reasonable dup. dup is not really part of the
+   language but rather a convention used to copy items that have
+   aliasing/sharing. For example, dynamic arrays, associative,
+   BitArray, HTTP have dup defined since a basic assignment of them
+   introduces sharing. So if you want your class to have aliasing but
+   still want an out mixin(Dup) and don't bother with mixin(PostBlit).
 */
-const string Dup = `
+const(string) Dup = `
 
   @property auto idup() const {
     return cast(immutable(typeof(this)))this.dup;
@@ -100,25 +90,28 @@ const string Dup = `
 `;
 
 /**
-   Mixin to provide both a post blit and opEquals which usually go together.
+   Mixin to provide both a post blit and opEquals which usually go
+   together.
 */
-const string Deep = `
+const(string) Deep = `
   mixin(PostBlit);
   mixin(OpEquals);
 `;
 
 /**
-   Mixin to provide a this(this). This is very similar to dup in that it calls
-   dup on all dupable fields of the struct. Decide up front if you want deep
-   semantics (i.e. assignment will make deep copies of all members) on your
-   struct. If you do, use this to get that. This is only useful if one or more of
-   your fields require deep copy (like associative arrays, arrays, other classes
-   with dup). If you are ok with shallow semantics, forego this and consider
-   using mixin(Dup) to allow for deep copy. If you decide to go the PostBlit
-   route, you probably need an opEquals with deep comparison. So consider
-   mixin(DeepSemantics) wich includes mixin(PostBlit) and mixin(OpEquals).
+   Mixin to provide a this(this). This is very similar to dup in that
+   it calls dup on all dupable fields of the struct. Decide up front
+   if you want deep semantics (i.e. assignment will make deep copies
+   of all members) on your struct. If you do, use this to get
+   that. This is only useful if one or more of your fields require
+   deep copy (like associative arrays, arrays, other classes with
+   dup). If you are ok with shallow semantics, forego this and
+   consider using mixin(Dup) to allow for deep copy. If you decide to
+   go the PostBlit route, you probably need an opEquals with deep
+   comparison. So consider mixin(DeepSemantics) wich includes
+   mixin(PostBlit) and mixin(OpEquals).
 */
-const string PostBlit = `
+const(string) PostBlit = `
 this(this) {
     alias typeof(this) T;
     foreach (i, field ; typeof(T.tupleof)) {
@@ -147,8 +140,6 @@ this(this) {
                  T.tupleof[i].stringof);
       }
     }
-    static if(LogPostblit) 
-      writeln("Postblit ", typeid(T), " ", pp!(T, "...")(this));
   }
 `;
 
@@ -156,36 +147,40 @@ this(this) {
    Mixin to provide toHash for a struc that incorporates some aspect of all
    fields to the function.
 */
-const string ToHash = `
+const(string) ToHash = `
   /**
     Hashing function hitting all data - mileage may vary.
     TODO: Make this and deepHash pure when foreach iteration permits
    */
-  hash_t toHash() const /* pure */ nothrow {
+  hash_t toHash() const nothrow {
     return deepHash!(typeof(this))(this);
   }
 `;
 
 /**
-   Mixin to provide hashing functionality on a struct. For example, to make your
-   struct usable as a key in an associative array you need to provide suitable
-   and consistent toHash, opCmp, and opEquals. This mixin pulls in all three.
+   Mixin to provide hashing functionality on a struct. For example, to
+   make your struct usable as a key in an associative array you need
+   to provide suitable and consistent toHash, opCmp, and
+   opEquals. This mixin pulls in all three.
    
    According to the language spec: 
    
-   'The implementation may use either opEquals or opCmp or both. Care should be
-   taken so that the results of opEquals and opCmp are consistent with each other
-   when the class objects are the same or not.'
+   'The implementation may use either opEquals or opCmp or both. Care
+   should be taken so that the results of opEquals and opCmp are
+   consistent with each other when the class objects are the same or
+   not.'
    
-   It is not clear whether that means you can leave opCmp out and it is capable
-   of using opEquals alone... I had trouble there, so both are pulled in.
+   It is not clear whether that means you can leave opCmp out and it
+   is capable of using opEquals alone... I had trouble there, so both
+   are pulled in.
    
-   In terms of performance, the point of the hash function is to get a good
-   distribution. This implementation may be very expensive to compute compared to
-   other custom hashes and it may not provide a good distribution. But you should
-   be able to store HashSupport structs in a hash.
+   In terms of performance, the point of the hash function is to get a
+   good distribution. This implementation may be very expensive to
+   compute compared to other custom hashes and it may not provide a
+   good distribution. But you should be able to store HashSupport
+   structs in a hash.
 */
-const string HashSupport = `
+const(string) HashSupport = `
   mixin(OpEquals);
   mixin(OpCmp);
   mixin(ToHash);
@@ -193,15 +188,6 @@ const string HashSupport = `
 
 
 // custom <dmodule mix public_section>
-
-static if(LogRunTime) { 
-  import std.stdio; 
-}
-
-static if(LogPostblit) { 
-  import std.stdio; 
-  import pprint.pp; 
-}
 
 /** 
   For debugging, logs a compile time message at various points. If mixing in
@@ -214,12 +200,7 @@ string LogInfo(string tag, string T, string instance) {
   static if(LogCompile) {
     pragma(msg, "CT: `~tag~`", `~T~`);
   }
-  static if(LogRunTime) {
-    try {
-      writeln("RT: `~tag~`", `~instance~`);
-    } catch(Exception) {
-    }
-  }`;
+  `;
 }
 
 /** Discriminates a pass type by its size
@@ -252,14 +233,12 @@ template ReadOnly(alias name) {
   static if(prefersReference) {
     enum ReadOnly = `
 public @property auto `~p~`() const { 
-  debug writeln("Reading ", `~v~`);
   return `~v~`; 
 }
 `;
   } else {
     enum ReadOnly = `
 public @property ref auto `~p~`() const { 
-  debug writeln("Reading ", `~v~`);
   return `~v~`; 
 }
 `;
@@ -352,20 +331,20 @@ void gdup(T1, T2)(ref T1 t1, const ref T2 t2) {
     static if(LogCompile) pragma(msg, "CT: ...T1 done assoc array ", T1);
   } else static if(is(T1==struct)) {
     static if(LogCompile) pragma(msg, "CT: ...T1 is struct ", T1);
-    Unqual!(typeof(t1)) temp;
-    bool isPostBlit = t1 is t2;
-    typeof(t1) *bestChoice = isPostBlit? &temp : &t1;
-    foreach (i, ignore ; typeof(T1.tupleof)) {
-      static if(T1.tupleof[i].stringof.endsWith(".this")) {
-        static assert(0, "no dup of nested non static structs!");
+      Unqual!(typeof(t1)) temp;
+      bool isPostBlit = t1 is t2;
+      typeof(t1) *bestChoice = isPostBlit? &temp : &t1;
+      foreach (i, ignore ; typeof(T1.tupleof)) {
+        static if(T1.tupleof[i].stringof.endsWith(".this")) {
+          static assert(0, "no dup of nested non static structs!");
+        }
+        static if(LogCompile) 
+          pragma(msg, "CT: .....dupping field ", t2.tupleof[i].stringof);
+        opDupPreferred((*bestChoice).tupleof[i], t2.tupleof[i]);
       }
-      static if(LogCompile) 
-        pragma(msg, "CT: .....dupping field ", t2.tupleof[i].stringof);
-      opDupPreferred((*bestChoice).tupleof[i], t2.tupleof[i]);
-    }
-    if(isPostBlit) {
-      swap(t1, temp);
-    }
+      if(isPostBlit) {
+        swap(t1, temp);
+      }
   } else static if(isPointer!T1) {
     static if(LogCompile) pragma(msg, "CT: ...T1 is pointer ", T1);
     alias Unqual!(PointerTarget!T1) Target;
@@ -379,12 +358,14 @@ void gdup(T1, T2)(ref T1 t1, const ref T2 t2) {
                       " since can not be default heap allocated");
       }
     }
+  } else static if(is(T1==union)) {
+      t1 = t2;
   } else static if(is(T1==class)) {
     static if(LogCompile) 
       pragma(msg, "CT: ...T1 is a class else entirely ", T1);
-    static assert(0, "Class gdup not supported, requested type "~T);
+    static assert(0, "Class gdup not supported, requested type "~T1.stringof);
   } else {
-    static assert(0, "Missing gdup support for "~T1);
+    static assert(0, "Missing gdup support for "~T1.stringof);
   }
 }
 
@@ -394,8 +375,8 @@ void gdup(T1, T2)(ref T1 t1, const ref T2 t2) {
     Supports associative and dynamic arrays
     Treats default float.init as equal
  */
-bool typesDeepEqual(T,F)(auto ref T lhs, auto ref F rhs) 
-  if(is(Unqual!T == Unqual!F)) {
+bool typesDeepEqual(T,F)(auto ref T lhs, auto ref F rhs)
+  if(is(DeepUnqual!T == DeepUnqual!F)) {
   mixin(LogInfo("typesDeepEqual by ref ", "T", "lhs"));
   bool result = true;
 
@@ -424,8 +405,8 @@ bool typesDeepEqual(T,F)(auto ref T lhs, auto ref F rhs)
     alias ValueType!(T) AAValueType;
     alias Unqual!(AAValueType)[Unqual!(AAKeyType)] NoConstAssocArr;
     if((cast(NoConstAssocArr)lhs).length != (cast(NoConstAssocArr)rhs).length) return false;
-    auto lhsKeys = (cast(NoConstAssocArr)lhs).keys.dup;
-    auto rhsKeys = (cast(NoConstAssocArr)rhs).keys.dup;
+    auto lhsKeys = (cast(NoConstAssocArr)lhs).keys;
+    auto rhsKeys = (cast(NoConstAssocArr)rhs).keys;
 
     lhsKeys.sort;
     rhsKeys.sort;
@@ -474,7 +455,7 @@ bool typesDeepEqual(T,F)(auto ref T lhs, auto ref F rhs)
   return result;
 }
 
-ref T opDupPreferred(T, F)(ref T target, const ref F src) 
+ref T opDupPreferred(T, F)(ref T target, const ref F src)
   if(is(DeepUnqual!T == DeepUnqual!F)) {
   static if(LogCompile) 
     pragma(msg, 
@@ -504,8 +485,8 @@ int opCmpPreferred(T, F)(const ref T lhs, const ref F rhs) {
 /** Compare all fields for suitable opCmp.
     Order will be that returned by T.tupleof
  */
-int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs) 
-  if(is(Unqual!T == Unqual!F)) {
+int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs)
+  if(is(DeepUnqual!T == DeepUnqual!F)) {
 
   static if(isFloatingPoint!(T)) {
     if(isnan(lhs) && isnan(rhs)) { return 0; }
