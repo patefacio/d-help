@@ -8,9 +8,16 @@ import std.array;
 import std.conv;
 import std.stdio;
 import std.traits;
+import std.string;
+import std.datetime;
+import std.format;
 
 
 // custom <dmodule pp public_section>
+
+template ArrayElementType(T : U[], U) {
+  alias U ArrayElementType;
+}
 
 /**
    Print contents of $(D t) to the appender $(D appender).
@@ -26,15 +33,18 @@ import std.traits;
     item = Item to dump into appender
  */
 private void print(T, A, 
-           string indent = "  ", 
-           string cum_indent = "", 
-           string trailer = "\n")
+                   string indent = "  ", 
+                   string cum_indent = "", 
+                   string trailer = "\n")
   (A appender, ref T t) if(!isPointer!T) {
   const string new_indent = cum_indent ~ indent;
-  static if (is(T == struct) || is(T == class)) {
+
+  static if(is(T == Date)) {
+    appender.put(to!string(t));
+  } else static if (is(T == struct) || is(T == class)) {
     static if(is(T == class)) {
       if(!t) {
-        appender.put(text("null", trailer));
+        appender.put(text("null"));
         return;
       }
     } 
@@ -43,60 +53,90 @@ private void print(T, A,
       appender.put(t.pprint(indent, cum_indent, trailer));
       return;
     } else static if(isIterable!T) {
-      appender.put("[\n");
+      appender.put(text("[", trailer));
       int index = 0;
 
       foreach(ref item; t) {
-        appender.put(new_indent);
-        appender.put(text("[", index++, "]->"));
-        print!(typeof(item), A, indent, new_indent)(appender, item);
+        if(index) appender.put(trailer);
+        appender.put(text(new_indent, "[", index++, "]->"));
+        print!(typeof(item), A, indent, new_indent, trailer)(appender, item);
       }
-      appender.put(text(indent, "]", trailer));
+      appender.put(text(trailer, cum_indent, "]"));
       return;
     } else {
-      appender.put("{\n");
+      appender.put(text("{"));
       foreach (i, field; t.tupleof) {
         auto fieldName = T.tupleof[i].stringof;
-        appender.put(text(new_indent, fieldName, " = "));
-        print!(typeof(field), A, indent, new_indent)(appender, field);
+        appender.put(text(trailer, new_indent, fieldName, " = "));
+        static if(isPointer!(typeof(T.tupleof[i])) &&
+                  (is(Unqual!(PointerTarget!(typeof(T.tupleof[i]))) ==
+                      Unqual!T))) {
+          appender.put(text(indent, field, trailer));
+        } else {
+          print!(typeof(field), A, indent, new_indent, trailer)(appender, field);
+        }
       }
-      appender.put(text(cum_indent, "}", trailer));
+      appender.put(text(trailer, cum_indent, "}"));
       return;
     }
-  } else static if(is(T == string)) {
-    appender.put(text('"', t,"\"", trailer));
+  } else static if(isSomeString!T && !isStaticArray!T) {
+      //    appender.put(text('"', t,"\"", trailer));
+    appender.put(text('"', t,"\""));
   } else static if(isArray!(T)) {
-    appender.put("[\n");
+    appender.put("[");
+    static if(!isSomeChar!(ArrayElementType!T)) {
+      appender.put(trailer);
+    }
     int index = 0;
     foreach(item; t) {
-      appender.put(new_indent);
-      appender.put(text("[", index++, "]->"));
-      print!(typeof(item), A, indent, new_indent)(appender, item);
+      if(index) appender.put(trailer);
+      appender.put(text(new_indent, "[", index++, "]->"));
+      // Here be sure not to output '0' character directly
+      static if(isSomeChar!(typeof(item))) {
+        if(item) { 
+          appender.put(item);
+        } else {
+          appender.put("<null>");
+        }
+      } else {
+        print!(typeof(item), A, indent, new_indent, trailer)(appender, item);
+      }
     }
-    appender.put(text(indent, "]", trailer));
+    appender.put(text(trailer, cum_indent, "]"));
     return;
   } else static if(isAssociativeArray!(T)) {
-    appender.put("{\n");
+    appender.put(text("{"));
+    size_t index;
     foreach(k,v; t) {
-      appender.put(text(new_indent, '('));
-      print!(typeof(k), A, indent, new_indent, "")(appender, k);
-      appender.put(text(" => \n", new_indent~indent));
-      print!(typeof(v), A, indent, new_indent, "")(appender, v);
-      appender.put(text("),", trailer));
+      appender.put(text(trailer, new_indent, '(', "K("));
+      print!(typeof(k), A, indent, new_indent, trailer)(appender, k);
+      appender.data.chomp();
+      appender.put(text(")[", index++, "]"));
+      appender.put(text(" => ", trailer, new_indent~indent, "V("));
+      print!(typeof(v), A, indent, new_indent~indent, trailer)(appender, v);
+      appender.data.chomp();
+      appender.put(")");
+      appender.put(text("),"));
     }
-    appender.put(text(indent, "}", trailer));
+    appender.put(text(trailer, cum_indent, "}"));
     return;
+  } else static if (isFloatingPoint!T) {
+      if(t > 1000) {
+        formattedWrite(appender, "%.2f", t);
+      } else {
+        appender.put(text(t));
+      }
   } else {
-    appender.put(text(t, trailer));
+    appender.put(text(t));
     return;
   }
 }
 
 /// ditto
 private void print(T, A,
-           string indent = "  ", 
-           string cum_indent = "", 
-           string trailer = "\n")
+                   string indent = "  ", 
+                   string cum_indent = "", 
+                   string trailer = "\n")
   (A appender, ref T t) if(isPointer!T) {
   static if(isFunctionPointer!T) {
     appender.put(text(typeid(T), trailer));
@@ -113,6 +153,7 @@ private void print(T, A,
   }
  }
 
+
 /**
    Pretty print $(D item) to a string.
 
@@ -123,9 +164,16 @@ private void print(T, A,
 
    Returns: A string with contents of $(D item)
  */
-string pp(T, string indent = " ")(ref T item) {
+string pp(T, string indent = " ", string cum_indent = "")(ref T item) {
   auto appender = appender!string();
-  print!(T, typeof(appender), indent) (appender, item);
+  print!(T, typeof(appender), indent, cum_indent) (appender, item);
+  return appender.data;
+}
+
+/// ditto
+string pp(T, string indent = " ", string cum_indent = "")(T item) {
+  auto appender = appender!string();
+  print!(T, typeof(appender), indent, cum_indent) (appender, item);
   return appender.data;
 }
 
@@ -194,12 +242,12 @@ unittest {
   [2]->3
  ]
  (Outer).assocArray = {
-  ("mom" => 
-   32),
-  ("son" => 
-   2),
-  ("dad" => 
-   34),
+  (K("mom")[0] => 
+   V(32)),
+  (K("son")[1] => 
+   V(2)),
+  (K("dad")[2] => 
+   V(34)),
  }
  (Outer).nestedStruct = {
   (NestedStruct).str = "str"
@@ -217,8 +265,7 @@ unittest {
   (NestedStaticClass).dogMonthsFactor = 84
  }
  (Outer).nestedNullClass = null
-}
-`;
+}`;
   assert(pp(o) == expected);
 
 // end <dmodule pp unittest>
