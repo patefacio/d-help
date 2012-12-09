@@ -1,19 +1,174 @@
 /**
-   Functions for pretty printing data
+   Functions for pretty printing and table printing data
 */
 
 module pprint.pp;
 
+import std.algorithm;
 import std.array;
 import std.conv;
-import std.stdio;
-import std.traits;
-import std.string;
 import std.datetime;
 import std.format;
+import std.regex;
+import std.stdio;
+import std.string;
+import std.traits;
+
+/**
+   Indicates no header should be displayed
+*/
+const(string[]) NoHeader;
+
+/**
+   Indicates the header should be the names of the fields involved
+*/
+const(string[]) DefaultHeader;
+
+/**
+   For table layout printing, which struct fields to use as columns
+*/
+enum FieldInclusionType { 
+  /**
+     Include only fields that are accessible
+  */
+  Accessible,
+  /**
+     Include inaccessible
+  */
+  Inaccessible
+}
 
 
 // custom <dmodule pp public_section>
+
+/** Returns the array of cells for this record
+ */
+private void getCells(T)(ref const(T) record, ref string[] cells) {
+  static if(is(T == struct) || is(T == class)) {
+    foreach (i, field; record.tupleof) {
+      getCells(field, cells);
+      //      cells ~= to!string(field);
+    }
+  } else static if(isIterable!T && !isSomeString!T) {
+    static assert(0, "Iterable columns not supported on "~T);
+  } else static if(isPointer!T) {
+    getCells(*record, header);
+  } else static if(isFloatingPoint!T) {
+    cells ~= pp(record);
+  } else {
+    cells ~= to!string(record);
+  }
+}
+
+/** Type tuple field names include (Typename).fieldName
+ *  This returns the stripped out fieldName
+ */
+string stripType(string type) {
+  static auto r = regex(r"^(\(\w+\)\.)");
+  return replace(type, r, "");
+}
+
+/** Returns the list field names as the header
+ */
+void getHeader(T)(ref string[] header, string owner = "") {
+  static if(is(T == struct) || is(T == class)) {
+    foreach (i, field; typeof(T.tupleof)) {
+      auto fieldName = stripType(T.tupleof[i].stringof);
+      size_t priorLength = header.length;
+      getHeader!(field)(header, owner.length? owner~'.'~fieldName : fieldName);
+    }
+  } else static if(isIterable!T && !isSomeString!T) {
+      static assert(0, "Iterable columns not supported");
+    } else static if(isPointer!T) {
+      getHeader(PointerTarget!T, header, owner);
+    } else {
+      header ~= owner;
+    }
+}
+
+void putRow(Appender) (Appender appender, string[] row, 
+                       size_t[] fieldMaxSizes) {
+  appender.put('|');
+  foreach(i, cell; row) {
+    formattedWrite(appender, "%"~to!string(fieldMaxSizes[i]+1)~"s", cell);
+    appender.put('|');
+  }
+  appender.put('\n');
+}
+
+/** Print an iterable of T as a table - the kind you might see output from a
+ *  database session. Pass NoHeader to exclude a header, DefaultHeader to use
+ *  the field names of type T or your own header.
+ */
+void printTable(A, T)
+  (A appender, ref T items, 
+   ref const(string[]) header = DefaultHeader,
+   FieldInclusionType inclusionType = FieldInclusionType.Accessible) 
+  if(isIterable!T) {
+
+    bool excludeHeader = (&header is &NoHeader);
+    bool useDefaultHeader = (&header is &DefaultHeader);
+    bool includeAllFields = inclusionType == FieldInclusionType.Inaccessible;
+
+    string[][] table;
+    size_t[] fieldMaxSizes;
+
+    if(!excludeHeader) {
+      if(useDefaultHeader) {
+        string[] defaultHeader;
+        getHeader!(ForeachType!T)(defaultHeader);
+        table ~= defaultHeader;
+      } else {
+        table ~= header.dup;
+      }
+      fieldMaxSizes.length = table[0].length;
+      foreach(i, headerName; table[0]) {
+        fieldMaxSizes[i] = headerName.length;
+      }
+    }
+
+    foreach(item; items) {
+      string[] cells;
+      getCells(item, cells);
+
+      if(0 == fieldMaxSizes.length) {
+        fieldMaxSizes.length = cells.length;
+      }
+
+      foreach(i, cell; cells) {
+        fieldMaxSizes[i] = max(fieldMaxSizes[i], cell.length);
+      }
+      table ~= cells;
+    }
+
+    if(excludeHeader) {
+      foreach(row; table) {
+        putRow(appender, row, fieldMaxSizes);
+      }
+    } else {
+      putRow(appender, table[0], fieldMaxSizes);
+
+      appender.put('|');
+      foreach(i, cell; table[0]) {
+        foreach(j; 0 .. (fieldMaxSizes[i]+1)) {
+          appender.put('-');
+        }
+        appender.put('|');
+      }
+      appender.put('\n');
+
+      foreach(row; table[1..$]) {
+        putRow(appender, row, fieldMaxSizes);
+      }
+    }
+  }
+
+/** table print the items using default header */
+string tp(T)(T items) {
+  auto appender = appender!string();
+  printTable(appender, items);
+  return appender.data;
+}
 
 template ArrayElementType(T : U[], U) {
   alias U ArrayElementType;
@@ -80,7 +235,6 @@ private void print(T, A,
       return;
     }
   } else static if(isSomeString!T && !isStaticArray!T) {
-      //    appender.put(text('"', t,"\"", trailer));
     appender.put(text('"', t,"\""));
   } else static if(isArray!(T)) {
     appender.put("[");
@@ -152,7 +306,6 @@ private void print(T, A,
     }
   }
  }
-
 
 /**
    Pretty print $(D item) to a string.
@@ -232,6 +385,9 @@ unittest {
 
   import std.stdio;
   auto o = new Outer;
+  ///////////////////////////////////////////////////////////////////////////
+  // Pretty printing
+  ///////////////////////////////////////////////////////////////////////////
   o.nestedClass = o.new Outer.NestedClass();
   o.nestedStaticClass = new Outer.NestedStaticClass();
   o.assocArray = ["son":2, "dad":34, "mom":32];
@@ -267,6 +423,63 @@ unittest {
  (Outer).nestedNullClass = null
 }`;
   assert(pp(o) == expected);
+
+  ///////////////////////////////////////////////////////////////////////////
+  // Table printing
+  ///////////////////////////////////////////////////////////////////////////
+  struct A {
+    int x;
+    string y;
+  }
+
+  struct B {
+    A a;
+    string name;
+    int age;
+    double fitzerGuage;
+  }
+
+  auto b = [
+            B(A(1,"foo"), "doggie", 32, 12.24321),
+            B(A(1,"goo"), "maggie", 31, 1200.24321),
+            B(A(1,"doo"), "doogie", 34, 12000.24321),
+            B(A(1,"boo"), "boogie", 42, 120000000.24321),
+            ];
+
+  auto appender = appender!string();
+  appender.put("Using default header\n");
+  appender.put(tp(b));
+  appender.put("\nUsing no header\n");
+  printTable(appender, b, NoHeader);
+  appender.put("\nUsing custom header\n");
+
+  string[] header = [ "A count", "A label", 
+                      "[oa]ggieness", "goodness", "scale"  ];
+  printTable(appender, b, header);
+
+  assert(appender.data == 
+"Using default header
+| a.x| a.y|   name| age|  fitzerGuage|
+|----|----|-------|----|-------------|
+|   1| foo| doggie|  32|      12.2432|
+|   1| goo| maggie|  31|      1200.24|
+|   1| doo| doogie|  34|     12000.24|
+|   1| boo| boogie|  42| 120000000.24|
+
+Using no header
+| 1| foo| doggie| 32|      12.2432|
+| 1| goo| maggie| 31|      1200.24|
+| 1| doo| doogie| 34|     12000.24|
+| 1| boo| boogie| 42| 120000000.24|
+
+Using custom header
+| A count| A label| [oa]ggieness| goodness|        scale|
+|--------|--------|-------------|---------|-------------|
+|       1|     foo|       doggie|       32|      12.2432|
+|       1|     goo|       maggie|       31|      1200.24|
+|       1|     doo|       doogie|       34|     12000.24|
+|       1|     boo|       boogie|       42| 120000000.24|
+");
 
 // end <dmodule pp unittest>
 }
