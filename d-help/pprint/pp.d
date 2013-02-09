@@ -4,6 +4,7 @@
 
 module pprint.pp;
 
+public import opmix.traits;
 import std.algorithm;
 import std.array;
 import std.conv;
@@ -47,12 +48,13 @@ private void getCells(T)(ref const(T) record, ref string[] cells) {
   static if(is(T == struct) || is(T == class)) {
     foreach (i, field; record.tupleof) {
       getCells(field, cells);
-      //      cells ~= to!string(field);
     }
   } else static if(isIterable!T && !isSomeString!T) {
-    static assert(0, "Iterable columns not supported on "~T);
+    foreach(ref cell; record) {
+      getCells(cell, cells);
+    }
   } else static if(isPointer!T) {
-    getCells(*record, header);
+      getCells(*record, cells);
   } else static if(isFloatingPoint!T) {
     cells ~= pp(record);
   } else {
@@ -78,12 +80,12 @@ void getHeader(T)(ref string[] header, string owner = "") {
       getHeader!(field)(header, owner.length? owner~'.'~fieldName : fieldName);
     }
   } else static if(isIterable!T && !isSomeString!T) {
-      static assert(0, "Iterable columns not supported");
-    } else static if(isPointer!T) {
-      getHeader(PointerTarget!T, header, owner);
-    } else {
-      header ~= owner;
-    }
+
+  } else static if(isPointer!T) {
+      getHeader!(PointerTarget!T)(header, owner);
+  } else {
+    header ~= owner;
+  }
 }
 
 void putRow(Appender) (Appender appender, string[] row, 
@@ -106,72 +108,83 @@ void printTable(A, T)
    FieldInclusionType inclusionType = FieldInclusionType.Accessible) 
   if(isIterable!T) {
 
-    bool excludeHeader = (&header is &NoHeader);
-    bool useDefaultHeader = (&header is &DefaultHeader);
-    bool includeAllFields = inclusionType == FieldInclusionType.Inaccessible;
-
-    string[][] table;
-    size_t[] fieldMaxSizes;
-
-    if(!excludeHeader) {
-      if(useDefaultHeader) {
-        string[] defaultHeader;
-        getHeader!(ForeachType!T)(defaultHeader);
-        table ~= defaultHeader;
-      } else {
-        table ~= header.dup;
+    static if(isAssociativeArray!T) {
+      static struct KV {
+        KeyType!T key;
+        ValueType!T value;
       }
-      fieldMaxSizes.length = table[0].length;
-      foreach(i, headerName; table[0]) {
-        fieldMaxSizes[i] = headerName.length;
+      KV[] flattened;
+      flattened.reserve(items.length);
+      foreach(k, ref v; items) {
+        flattened ~= KV(k,v);
       }
-    }
-
-    foreach(item; items) {
-      string[] cells;
-      getCells(item, cells);
-
-      if(0 == fieldMaxSizes.length) {
-        fieldMaxSizes.length = cells.length;
-      }
-
-      foreach(i, cell; cells) {
-        fieldMaxSizes[i] = max(fieldMaxSizes[i], cell.length);
-      }
-      table ~= cells;
-    }
-
-    if(excludeHeader) {
-      foreach(row; table) {
-        putRow(appender, row, fieldMaxSizes);
-      }
+      printTable(appender, flattened, header);
     } else {
-      putRow(appender, table[0], fieldMaxSizes);
 
-      appender.put('|');
-      foreach(i, cell; table[0]) {
-        foreach(j; 0 .. (fieldMaxSizes[i]+1)) {
-          appender.put('-');
+      bool excludeHeader = (&header is &NoHeader);
+      bool useDefaultHeader = (&header is &DefaultHeader);
+      bool includeAllFields = inclusionType == FieldInclusionType.Inaccessible;
+
+      string[][] table;
+      size_t[] fieldMaxSizes;
+
+      if(!excludeHeader) {
+        if(useDefaultHeader) {
+          string[] defaultHeader;
+          getHeader!(ForeachType!T)(defaultHeader);
+          table ~= defaultHeader;
+        } else {
+          table ~= header.dup;
         }
-        appender.put('|');
+        fieldMaxSizes.length = table[0].length;
+        foreach(i, headerName; table[0]) {
+          fieldMaxSizes[i] = headerName.length;
+        }
       }
-      appender.put('\n');
 
-      foreach(row; table[1..$]) {
-        putRow(appender, row, fieldMaxSizes);
+      foreach(item; items) {
+        string[] cells;
+        getCells(item, cells);
+
+        if(0 == fieldMaxSizes.length) {
+          fieldMaxSizes.length = cells.length;
+        }
+
+        foreach(i, cell; cells) {
+          fieldMaxSizes[i] = max(fieldMaxSizes[i], cell.length);
+        }
+        table ~= cells;
+      }
+
+      if(excludeHeader) {
+        foreach(row; table) {
+          putRow(appender, row, fieldMaxSizes);
+        }
+      } else {
+        putRow(appender, table[0], fieldMaxSizes);
+
+        appender.put('|');
+        foreach(i, cell; table[0]) {
+          foreach(j; 0 .. (fieldMaxSizes[i]+1)) {
+            appender.put('-');
+          }
+          appender.put('|');
+        }
+        appender.put('\n');
+
+        foreach(row; table[1..$]) {
+          putRow(appender, row, fieldMaxSizes);
+        }
       }
     }
   }
 
 /** table print the items using default header */
-string tp(T)(T items) {
+string tp(T)(T items,    
+             ref const(string[]) header = DefaultHeader) {
   auto appender = appender!string();
-  printTable(appender, items);
+  printTable(appender, items, header);
   return appender.data;
-}
-
-template ArrayElementType(T : U[], U) {
-  alias U ArrayElementType;
 }
 
 /**
@@ -191,10 +204,9 @@ private void print(T, A,
                    string indent = "  ", 
                    string cum_indent = "", 
                    string trailer = "\n")
-  (A appender, ref T t) if(!isPointer!T) {
+  (A appender, ref const(T) t) if(!isPointer!T) {
   const string new_indent = cum_indent ~ indent;
-
-  static if(is(T == Date)) {
+  static if(is(Unqual!T == Date)) {
     appender.put(to!string(t));
   } else static if (is(T == struct) || is(T == class)) {
     static if(is(T == class)) {
@@ -220,8 +232,8 @@ private void print(T, A,
       return;
     } else {
       appender.put(text("{"));
-      foreach (i, field; t.tupleof) {
-        auto fieldName = T.tupleof[i].stringof;
+      foreach (i, ref field; t.tupleof) {
+        auto fieldName = Unqual!T.tupleof[i].stringof;
         appender.put(text(trailer, new_indent, fieldName, " = "));
         static if(isPointer!(typeof(T.tupleof[i])) &&
                   (is(Unqual!(PointerTarget!(typeof(T.tupleof[i]))) ==
@@ -242,7 +254,7 @@ private void print(T, A,
       appender.put(trailer);
     }
     int index = 0;
-    foreach(item; t) {
+    foreach(ref item; t) {
       if(index) appender.put(trailer);
       appender.put(text(new_indent, "[", index++, "]->"));
       // Here be sure not to output '0' character directly
@@ -261,7 +273,7 @@ private void print(T, A,
   } else static if(isAssociativeArray!(T)) {
     appender.put(text("{"));
     size_t index;
-    foreach(k,v; t) {
+    foreach(k, ref v; cast(DeepUnqual!(typeof(t)))t) {
       appender.put(text(trailer, new_indent, '(', "K("));
       print!(typeof(k), A, indent, new_indent, trailer)(appender, k);
       appender.data.chomp();
@@ -291,11 +303,13 @@ private void print(T, A,
                    string indent = "  ", 
                    string cum_indent = "", 
                    string trailer = "\n")
-  (A appender, ref T t) if(isPointer!T) {
+  (A appender, ref const(T) t) if(isPointer!T) {
   static if(isFunctionPointer!T) {
     appender.put(text(typeid(T), trailer));
   } else {
-    static if(is(T == void*)) {
+    static if(is(T == void*) || 
+              is(T == immutable(void*)) || 
+              is(T == const(void*))) {
       appender.put(text("void*(", t, ")", trailer));
     } else {
       if(!t) {
@@ -317,23 +331,30 @@ private void print(T, A,
 
    Returns: A string with contents of $(D item)
  */
-string pp(T, string indent = " ", string cum_indent = "")(ref T item) {
+
+string pp(T, string indent = " ", string cum_indent = "")(ref const(T) item) {
+  auto appender = appender!string();
+  print!(T, typeof(appender), indent, cum_indent) (appender, item);
+  return appender.data;
+  }
+
+/// ditto
+string pp(T, string indent = " ", string cum_indent = "")(const(T) item) {
   auto appender = appender!string();
   print!(T, typeof(appender), indent, cum_indent) (appender, item);
   return appender.data;
 }
 
-/// ditto
-string pp(T, string indent = " ", string cum_indent = "")(T item) {
+string moneyFormat(T)(T d) if(isFloatingPoint!T) {
   auto appender = appender!string();
-  print!(T, typeof(appender), indent, cum_indent) (appender, item);
+  formattedWrite(appender, "%.2f", d);
   return appender.data;
 }
 
 // end <dmodule pp public_section>
 
 
-unittest { 
+static if(1) unittest { 
   class Outer { 
     alias int[] IntArray;
     alias int[string] AssocArray;
@@ -479,6 +500,18 @@ Using custom header
 |       1|     goo|       maggie|       31|      1200.24|
 |       1|     doo|       doogie|       34|     12000.24|
 |       1|     boo|       boogie|       42| 120000000.24|
+");
+
+  auto map = [
+              "key1" : B(A(1,"zoom"), "doggie", 32, 12.24321),
+              "key2" : B(A(1,"broom"), "maggie", 31, 1200.24321),
+              ];
+
+  assert(tp(map) == 
+         "|  key| value.a.x| value.a.y| value.name| value.age| value.fitzerGuage|
+|-----|----------|----------|-----------|----------|------------------|
+| key1|         1|      zoom|     doggie|        32|           12.2432|
+| key2|         1|     broom|     maggie|        31|           1200.24|
 ");
 
 // end <dmodule pp unittest>

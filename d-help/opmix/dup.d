@@ -4,9 +4,9 @@
 
 module opmix.dup;
 
+public import opmix.traits;
 import std.algorithm;
 import std.string;
-import std.traits;
 
 /**
    Set this to true to see what is going on at compile time
@@ -16,40 +16,8 @@ const(bool) LogDupCompile = false;
 
 // custom <dmodule dup public_section>
 
-template DeepUnqual(T) {
-  static if(isAssociativeArray!T) {
-    alias Unqual!(Unqual!(ValueType!T)[Unqual!(KeyType!T)]) DeepUnqual;    
-  } else static if(isDynamicArray!T) {
-    alias Unqual!(Unqual!(ArrayElementType!T)[]) DeepUnqual;
-  } else static if(isPointer!T) {
-    alias Unqual!(PointerTarget!T) * DeepUnqual;
-  } else {
-    alias Unqual!T DeepUnqual;
-  }
-}
-
-template ArrayElementType(T : U[], U) {
-  alias U ArrayElementType;
-}
-
-template isArrayOfNonMutable(T) {
-  static if(isDynamicArray!T && 
-            (is(ArrayElementType!T == const) ||
-             is(ArrayElementType!T == immutable))) {
-    enum isArrayOfImmutable = true;
-  } else {
-    enum isArrayOfImmutable = false;
-  }
-}
-
-template isArrayOfImmutable(T) {
-  static if(isDynamicArray!T && is(ArrayElementType!T == immutable)) {
-    enum isArrayOfImmutable = true;
-  } else {
-    enum isArrayOfImmutable = false;
-  }
-}
-
+/** Perform a deep copy of the referenced instance
+ */
 @property auto gdup(T)(const ref T t) {
   DeepUnqual!T result;
   static if(LogDupCompile) 
@@ -57,6 +25,13 @@ template isArrayOfImmutable(T) {
            "CT: gdup prop on (", 
            typeof(result), " <= ", typeof(t), ")");
   gdup(result, t);
+  return result;
+}
+
+/** Perform a deep immutable copy of the referenced instance
+ */
+@property auto gidup(T)(const ref T t) {
+  immutable(T) result = cast(immutable)(t.gdup);
   return result;
 }
 
@@ -121,7 +96,7 @@ void gdup(T1, T2)(ref T1 t1, const ref T2 t2) {
       static if(LogDupCompile) 
         pragma(msg, "CT: ...T1 is assoc array ", T1, 
                " w value type ", ValueType!T1, " aka ", typeof(t1));
-  
+
       alias KeyType!(T1) AAKeyType;
       alias ValueType!(T1) AAValueType;
       alias DeepUnqual!(AAValueType)[DeepUnqual!(AAKeyType)] NoConstAssocArr;
@@ -140,11 +115,13 @@ void gdup(T1, T2)(ref T1 t1, const ref T2 t2) {
       static if(LogDupCompile) pragma(msg, "CT: ...T1 is struct ", T1);
         foreach (i, ignore ; typeof(T1.tupleof)) {
           static if(T1.tupleof[i].stringof.endsWith(".this")) {
-            static assert(0, "no dup of nested non static structs!");
+            static assert(0, "no dup of nested non static structs! field " 
+                          ~ T1.tupleof[i].stringof);
+          } else {
+            static if(LogDupCompile) 
+              pragma(msg, "CT: .....dupping field ", t2.tupleof[i].stringof);
+            opDupPreferred(t1.tupleof[i], t2.tupleof[i]);
           }
-          static if(LogDupCompile) 
-            pragma(msg, "CT: .....dupping field ", t2.tupleof[i].stringof);
-          opDupPreferred(t1.tupleof[i], t2.tupleof[i]);
         }
     } else static if(isPointer!T1) {
       static if(LogDupCompile) pragma(msg, "CT: ...T1 is pointer ", T1);

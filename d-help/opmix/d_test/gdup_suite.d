@@ -90,6 +90,11 @@ class CustomDupCalled {
     assert(A.dupHasBeenCalled);
     assert(B.dupHasBeenCalled);
 
+    auto another = c.gidup;
+    pragma(msg, typeof(another));
+    assertNotEquals(another.b.a.c.ptr, c.b.a.c.ptr);
+    assert(0==typesDeepCmp(another,c));
+
 // end <custom_dup_calledtest_custom_dup_called>
   }
 }

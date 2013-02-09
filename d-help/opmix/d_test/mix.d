@@ -16,8 +16,8 @@ class HashSupportTest {
      PostBlit has reference semantics.
   */
   static struct WrappedHash { 
-    mixin(HashSupport);
-    mixin(Dup);
+    mixin HashSupport;
+    mixin Dup;
     
 
 // custom <dstruct wrapped_hash public_section>
@@ -89,13 +89,13 @@ class HashSupportTest {
 class HashDeepSemantics { 
   mixin TestMixin;
   /**
-     Similar to above, but with deep semantics (mixin(PostBlit)) causing
+     Similar to above, but with deep semantics (mixin PostBlit) causing
      immutable(T)[] to be shallow copied since its safe.
   */
   static struct WrappedHashDeep { 
-    mixin(HashSupport);
-    mixin(PostBlit);
-    mixin(Dup);
+    mixin HashSupport;
+    mixin PostBlit;
+    mixin Dup;
     
 // custom <dstruct wrapped_hash_deep public_section>
 // end <dstruct wrapped_hash_deep public_section>
@@ -139,8 +139,8 @@ class HashDeepSemantics {
 class PostBlitDeepSemantics { 
   mixin TestMixin;
   static struct WrappedHash { 
-    mixin(HashSupport);
-    mixin(Dup);
+    mixin HashSupport;
+    mixin Dup;
     
 
 // custom <dstruct wrapped_hash public_section>
@@ -160,8 +160,8 @@ class PostBlitDeepSemantics {
      pulled so instances can be deep compared.
   */
   static struct PostBlitExample { 
-    mixin(Deep);
-    mixin(Dup);
+    mixin Deep;
+    mixin Dup;
     
 // custom <dstruct post_blit_example public_section>
 // end <dstruct post_blit_example public_section>
@@ -206,8 +206,8 @@ class BasicTypeCoverage {
      Struct with most basic types (missing [i|c][float|double|real])
   */
   static struct BasicTypes { 
-    mixin(HashSupport);
-    mixin(Dup);
+    mixin HashSupport;
+    mixin Dup;
     
 // custom <dstruct basic_types public_section>
 // end <dstruct basic_types public_section>
@@ -285,7 +285,7 @@ class InfinniteLoop {
      One grabs the other, the other grabs the one - was causing infinite loop
   */
   struct PartGrabbers { 
-    mixin(HashSupport);
+    mixin HashSupport;
     alias PartGrabbers* PartGrabbersPtr;
     PartGrabbersPtr other;
     int extra = 3;
@@ -323,15 +323,15 @@ class HeavyNesting {
      Top level class with nested classes for testing HashSupport(OpCmp and OpEquals) and Dup.
   */
   struct A { 
-    mixin(HashSupport);
-    mixin(Dup);
+    mixin HashSupport;
+    mixin Dup;
     alias string[string] SSMap;
     alias B[B] BBMap;
     alias int* IntPtr;
     alias B* BPtr;
     struct B { 
-      mixin(HashSupport);
-      mixin(Dup);
+      mixin HashSupport;
+      mixin Dup;
       
 // custom <dstruct b public_section>
 // end <dstruct b public_section>
@@ -447,6 +447,10 @@ class HeavyNesting {
     assert(IsImmutable!(typeof(idup)) && !IsImmutable!(typeof(dup)));
     assert(a.dup.idup == a.idup.dup);
 
+    auto zoo1 = Zoo(['x','y','z'].dup);
+    auto zoo2 = Zoo(['x','y','z'].dup);
+    assert(zoo1 == zoo2);
+
 // end <heavy_nestingtest_nesting>
   }
 }
@@ -458,6 +462,11 @@ void main() {
 
 
 // custom <dmodule mix public_section>
+
+struct Zoo {
+  char c[];
+  mixin OpEquals;
+}
 
 static void equalHashSanity(T)(const ref T lhs, const ref T rhs) {
   assertEquals(lhs, rhs);    

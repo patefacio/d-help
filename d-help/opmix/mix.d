@@ -15,7 +15,7 @@
    and allowing:
    
    struct S {
-     mixin(OpEquals);
+     mixin OpEquals;
      int[int] _m;
    }
    
@@ -40,34 +40,23 @@ import std.traits;
 */
 const(bool) LogCompile = false;
 
-const(string) OpEquals = `
-bool opEquals(const ref typeof(this) other) const {
-  mixin(LogInfo("opEquals by ref ", "typeof(this)", "this"));
-  return typesDeepEqual(this, other);
-}
 
-bool opEquals(const typeof(this) other) const {
-  mixin(LogInfo("opEquals by val ", "typeof(this)", "this"));
-  return typesDeepEqual(this, other);
-}
-`
-;
+// custom <dmodule mix public_section>
 
 /**
    Mixin to provide reasonable opCmp. It deeply compares the fields of
    the struct and assumes member structs have suitable opCmp. Use
    this, for example, to enable storing instances in a RedBlackTree.
 */
-const(string) OpCmp = `
-int opCmp(const ref typeof(this) other) const {
-  return typesDeepCmp(this, other);
-}
+mixin template OpCmp() {
+  int opCmp(const ref typeof(this) other) const {
+    return typesDeepCmp(this, other);
+  }
 
-int opCmp(const typeof(this) other) const {
-  return typesDeepCmp(this, other);
+  int opCmp(const typeof(this) other) const {
+    return typesDeepCmp(this, other);
+  }
 }
-`
-;
 
 /**
    Mixin to provide a reasonable dup. dup is not really part of the
@@ -75,10 +64,9 @@ int opCmp(const typeof(this) other) const {
    aliasing/sharing. For example, dynamic arrays, associative,
    BitArray, HTTP have dup defined since a basic assignment of them
    introduces sharing. So if you want your class to have aliasing but
-   still want an out mixin(Dup) and don't bother with mixin(PostBlit).
+   still want an out (mixin Dup) and don't bother with (mixin PostBlit).
 */
-const(string) Dup = `
-
+mixin template Dup() {
   @property auto idup() const {
     return cast(immutable(typeof(this)))this.dup;
   }
@@ -88,16 +76,68 @@ const(string) Dup = `
     gdup(temp, this);
     return temp;
   }
-`;
+}
 
 /**
    Mixin to provide both a post blit and opEquals which usually go
    together.
 */
-const(string) Deep = `
-  mixin(PostBlit);
-  mixin(OpEquals);
-`;
+mixin template Deep() {
+  mixin PostBlit;
+  mixin OpEquals;
+}
+
+/** Mixin helper that does actual work for copying all fields as needed
+ */
+mixin template PostBlitFunction() {
+  void _postblit_() {
+    alias typeof(this) T;
+    foreach (i, field ; typeof(T.tupleof)) {
+      alias typeof(T.tupleof[i]) FieldType;
+      static if(isDynamicArray!(FieldType) &&
+                isArrayOfImmutable!FieldType) {
+        static if(LogCompile) 
+          pragma(msg, 
+                 "CT: No needless duping of immutable element type arr ", 
+                 T.tupleof[i]); 
+      } else static if(isPointer!(FieldType) || 
+                       isDynamicArray!(FieldType) ||
+                       isAssociativeArray!(FieldType) ||
+                       HasDup!FieldType) {
+          gdup(this.tupleof[i], this.tupleof[i]);
+        } else static if(hasAliasing!FieldType) {
+          static if(LogCompile) 
+            pragma(msg, 
+                   "CT: Postblit of ", T, " drilling down on ", 
+                   T.tupleof[i].stringof);
+          gdup(this.tupleof[i], this.tupleof[i]);
+          static if(LogCompile) 
+            pragma(msg, 
+                   "CT: Postblit of ", T, " *DONE* drilling down on ", 
+                   T.tupleof[i].stringof);
+        } else {
+          static if(LogCompile) 
+            pragma(msg, 
+                   "CT: Postblit of ", T, " ignoring ", 
+                   T.tupleof[i].stringof);
+        }
+    }
+  }
+}
+
+/** Mixin to provide a 'this(this) const'. In the future this will
+    likely/hopefully go away. The real purpose is to overcome some
+    inconsistencies in the langauge in which generated code calls postblits on
+    structs and requires this signature. At this time it is not clear this is
+    defined completely by the langauage. Stay tuned.
+ */
+mixin template PostBlitConst() {
+  mixin PostBlitFunction;
+  this(this) const {
+    void delegate() dg = &_postblit_;
+    dg();
+  }
+}
 
 /**
    Mixin to provide a this(this). This is very similar to dup in that
@@ -112,83 +152,70 @@ const(string) Deep = `
    comparison. So consider mixin(DeepSemantics) wich includes
    mixin(PostBlit) and mixin(OpEquals).
 */
-const(string) PostBlit = `
-this(this) {
-    alias typeof(this) T;
-    foreach (i, field ; typeof(T.tupleof)) {
-      alias typeof(T.tupleof[i]) FieldType;
-      static if(isDynamicArray!(FieldType) &&
-                isArrayOfImmutable!FieldType) {
-        static if(LogCompile) 
-          pragma(msg, 
-                 "CT: No needless duping of immutable element type arr ", 
-                 T.tupleof[i]); 
-      } else static if(isPointer!(FieldType) || 
-                       isDynamicArray!(FieldType) ||
-                       isAssociativeArray!(FieldType) ||
-                       HasDup!FieldType) {
-        gdup(this.tupleof[i], this.tupleof[i]);
-      } else static if(hasAliasing!FieldType) {
-        static if(LogCompile) 
-          pragma(msg, 
-                 "CT: Postblit of ", T, " drilling down on ", 
-                 T.tupleof[i].stringof);
-        gdup(this.tupleof[i], this.tupleof[i]);
-      } else {
-        static if(LogCompile) 
-          pragma(msg, 
-                 "CT: Postblit of ", T, " ignoring ", 
-                 T.tupleof[i].stringof);
-      }
-    }
+mixin template PostBlit() {
+  mixin PostBlitFunction;
+  this(this) {
+    _postblit_();
   }
-`;
-
-/**
-   Mixin to provide toHash for a struc that incorporates some aspect of all
-   fields to the function.
-*/
-const(string) ToHash = `
-  /**
-    Hashing function hitting all data - mileage may vary.
-    TODO: Make this and deepHash pure when foreach iteration permits
-   */
-  hash_t toHash() const nothrow {
-    return deepHash!(typeof(this))(this);
-  }
-`;
+}
 
 /**
    Mixin to provide hashing functionality on a struct. For example, to
    make your struct usable as a key in an associative array you need
    to provide suitable and consistent toHash, opCmp, and
    opEquals. This mixin pulls in all three.
-   
+
    According to the language spec: 
-   
+
    'The implementation may use either opEquals or opCmp or both. Care
    should be taken so that the results of opEquals and opCmp are
    consistent with each other when the class objects are the same or
    not.'
-   
+
    It is not clear whether that means you can leave opCmp out and it
    is capable of using opEquals alone... I had trouble there, so both
    are pulled in.
-   
+
    In terms of performance, the point of the hash function is to get a
    good distribution. This implementation may be very expensive to
    compute compared to other custom hashes and it may not provide a
    good distribution. But you should be able to store HashSupport
    structs in a hash.
 */
-const(string) HashSupport = `
-  mixin(OpEquals);
-  mixin(OpCmp);
-  mixin(ToHash);
-`;
+mixin template HashSupport() {
+  mixin OpEquals;
+  mixin OpCmp;
+  mixin ToHash;
+}
 
+mixin template OpEquals() {
 
-// custom <dmodule mix public_section>
+  bool opEquals(const ref typeof(this) other) const {
+    mixin(LogInfo("opEquals by ref ", "typeof(this)", "this"));
+    return typesDeepEqual(this, other);
+  }
+
+  bool opEquals(const typeof(this) other) const {
+    mixin(LogInfo("opEquals by val ", "typeof(this)", "this"));
+    return typesDeepEqual(this, other);
+  }
+
+}
+
+/**
+   Mixin to provide toHash for a struc that incorporates some aspect of all
+   fields to the function.
+*/
+mixin template ToHash() {
+  /**
+    Hashing function hitting all data - mileage may vary.
+   */
+  hash_t toHash() const nothrow {
+    pragma(msg, __FILE__, ":", __LINE__, 
+           "\tTODO: Make this and deepHash pure when foreach iteration permits");
+    return deepHash!(typeof(this))(this);
+  }
+}
 
 /** 
   For debugging, logs a compile time message at various points. If mixing in
@@ -207,7 +234,9 @@ string LogInfo(string tag, string T, string instance) {
 /** Discriminates a pass type by its size
  */
 template PrefersPassByRef(T) {
-  static if(T.sizeof > 16 || hasAliasing!T) {
+  static if(isAssociativeArray!T || isDynamicArray!T) {
+    enum PrefersPassByRef = false;
+  } else static if(T.sizeof > 16 || hasAliasing!T)  {
     enum PrefersPassByRef = true;
   } else {
     enum PrefersPassByRef = false;
@@ -232,17 +261,17 @@ template ReadOnly(alias name) {
   enum p = name.stringof[1..$];
   enum prefersReference = PrefersPassByRef!(typeof(name));
   static if(prefersReference) {
-    enum ReadOnly = `
+    mixin(`
+public @property auto ref `~p~`() const { 
+  return `~v~`; 
+}
+`);
+  } else {
+    mixin(`
 public @property auto `~p~`() const { 
   return `~v~`; 
 }
-`;
-  } else {
-    enum ReadOnly = `
-public @property ref auto `~p~`() const { 
-  return `~v~`; 
-}
-`;
+`);
   }
 }
 
@@ -250,7 +279,7 @@ public @property ref auto `~p~`() const {
  * Don't be a liar - provide your own write accessor.
  */
 template ReadWrite(alias name) {
-  enum ReadWrite = ReadOnly!name;
+  mixin ReadOnly!(name);
 }
 
 /** Compare for equality all fields in a class
@@ -336,6 +365,7 @@ bool typesDeepEqual(T,F)(auto ref T lhs, auto ref F rhs)
     mixin(LogInfo("...typesDeepEqual catch-all ", "T", "lhs"));
     result = lhs == rhs;
   }
+
   return result;
 }
 
@@ -380,8 +410,8 @@ int typesDeepCmp(T,F)(auto ref T lhs, auto ref F rhs)
     ///// TODO: Remove const casts on keys
     // Compare keys in order
     alias Unqual!(ValueType!T)[Unqual!(KeyType!T)] NoConstAssocArr;
-    auto lhsKeys = (cast(NoConstAssocArr)lhs).keys.dup;
-    auto rhsKeys = (cast(NoConstAssocArr)rhs).keys.dup;
+    auto lhsKeys = (cast(NoConstAssocArr)lhs).keys;
+    auto rhsKeys = (cast(NoConstAssocArr)rhs).keys;
     if(lhsKeys.length != rhsKeys.length) return false;
 
     lhsKeys.sort;
@@ -437,7 +467,7 @@ hash_t deepHash(T)(const ref T t) nothrow {
     }
   } else static if(isAssociativeArray!T) {
     try {
-      foreach(key, value; t) {
+      foreach(key, ref value; t) {
         mixin(LogInfo("Hashing assoc array ", "T", "t"));
         result = result*prime + deepHash(key);
         result = result*prime + deepHash(value);
