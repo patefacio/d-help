@@ -6,6 +6,9 @@ rdmd -unittest -main a.d
 echo ... With Summary ...
 echo '$' rdmd -unittest -main a.d -s
 rdmd -unittest -main a.d -s
+echo ... Run just current module with summary ...
+echo '$' rdmd -unittest -main a.d -p -s
+rdmd -unittest -main a.d -p -s
 echo ... Filter to module a with summary ...
 echo '$' rdmd -unittest -main a.d -m a -s
 rdmd -unittest -main a.d -m a -s

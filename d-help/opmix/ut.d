@@ -67,6 +67,7 @@ version(unittest) {
   import std.algorithm;
   import std.regex;
   import std.getopt;
+  import std.path;
   import core.runtime;
   import pprint.pp;
 
@@ -117,8 +118,11 @@ version(unittest) {
   static this() {
     string[] args = Runtime.args;
     bool replaceTester = args.length > 1;
+    string program = args[0];
+    bool testProgram;
     getopt(args,
            "help|h", &help,
+           "program|p", &testProgram,
            "module_re|m", &modules,
            "summary|s", &summary,
            "test_re|t", &tests);
@@ -128,8 +132,9 @@ version(unittest) {
   Test Function based unit tests.
 
   Supported arguments:
+    [program|p] run tests just in module of program specified
     [module_re|m] one or more regexes to match on module names
-    [test_re|m] one or more regexes to match on test function names
+    [test_re|m] one or more regexes to match on test UDAs
     [summary|s] if true will show table of summary results
     [help|h] this message
 ");
@@ -137,6 +142,8 @@ version(unittest) {
     }
 
     if(replaceTester) {
+      if(testProgram)
+        modules = [r"^(?:(?:.*)\.)?" ~ baseName(program) ~ "$"];
       Runtime.moduleUnitTester(&unitTester);
     }
   }
