@@ -72,31 +72,15 @@ version(unittest) {
 
   static void function()[string] testFunctions;
 
-  bool unitTester() {
+  private {
     string[] modules;
     string[] tests;
-    string[] args = Runtime.args;
+    bool unmodified;
     bool summary;
     bool help;
+  }
 
-    getopt(args,
-           "help|h", &help,
-           "module_re|m", &modules,
-           "summary|s", &summary,
-           "test_re|t", &tests);
-
-    if(help) {
-      writeln("
-  Test Function based unit tests.
-
-  Supported arguments:
-    [module_re|m] one or more regexes to match on module names
-    [test_re|m] one or more regexes to match on test function names
-    [summary|s] if true will show table of summary results
-");
-      return false;
-    }
-
+  bool unitTester() {
     auto delim = regex(r":");
     struct TestResult { 
       string modName; 
@@ -132,6 +116,31 @@ version(unittest) {
   }
 
   static this() {
-     Runtime.moduleUnitTester(&unitTester);
+    string[] args = Runtime.args;
+    getopt(args,
+           "help|h", &help,
+           "module_re|m", &modules,
+           "unmodified|u", &unmodified,
+           "summary|s", &summary,
+           "test_re|t", &tests);
+
+    if(help) {
+      writeln("
+  Test Function based unit tests.
+
+  Supported arguments:
+    [module_re|m] one or more regexes to match on module names
+    [test_re|m] one or more regexes to match on test function names
+    [summary|s] if true will show table of summary results
+    [unmodified|u] if true will without intercepting anything
+                  use this to pick up unittest blocks not in of module scope
+    [help|h] this message
+");
+      return;
+    }
+
+    if(!unmodified) {
+      Runtime.moduleUnitTester(&unitTester);
+    }
   }
 }
