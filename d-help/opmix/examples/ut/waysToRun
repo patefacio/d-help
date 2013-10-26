@@ -1,0 +1,14 @@
+#!/bin/bash
+# Run as usual
+echo As Usual
+rdmd -unittest -main a.d 
+echo With Summary
+rdmd -unittest -main a.d -s
+echo Filter to module a with summary
+rdmd -unittest -main a.d -m a -s
+echo Filter to module b with summary
+rdmd -unittest -main a.d -m b -s
+echo Filter to test ABar with summary
+rdmd -unittest -main a.d -t ABar -s
+echo Filter to test BBar with summary
+rdmd -unittest -main a.d -t BBa -s
