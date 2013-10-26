@@ -75,7 +75,6 @@ version(unittest) {
   private {
     string[] modules;
     string[] tests;
-    bool unmodified;
     bool summary;
     bool help;
   }
@@ -117,10 +116,10 @@ version(unittest) {
 
   static this() {
     string[] args = Runtime.args;
+    bool replaceTester = args.length > 1;
     getopt(args,
            "help|h", &help,
            "module_re|m", &modules,
-           "unmodified|u", &unmodified,
            "summary|s", &summary,
            "test_re|t", &tests);
 
@@ -132,14 +131,12 @@ version(unittest) {
     [module_re|m] one or more regexes to match on module names
     [test_re|m] one or more regexes to match on test function names
     [summary|s] if true will show table of summary results
-    [unmodified|u] if true will without intercepting anything
-                  use this to pick up unittest blocks not in of module scope
     [help|h] this message
 ");
       return;
     }
 
-    if(!unmodified) {
+    if(replaceTester) {
       Runtime.moduleUnitTester(&unitTester);
     }
   }

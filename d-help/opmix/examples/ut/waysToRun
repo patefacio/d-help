@@ -18,6 +18,3 @@ rdmd -unittest -main a.d -t ABar -s
 echo ... Filter to test BBar with summary ...
 echo '$' rdmd -unittest -main a.d -t BBa -s
 rdmd -unittest -main a.d -t BBa -s
-echo ... Run as if no change ...
-echo '$' rdmd -unittest -main a.d -u
-rdmd -unittest -main a.d -u

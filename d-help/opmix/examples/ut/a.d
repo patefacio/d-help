@@ -13,7 +13,14 @@ unittest {
   writeln("A: Foo is clean");
 }
 
+struct S {
+  @("S UT") unittest {
+    writeln("S UT: checks out");
+  }
+}
+
 @UT("ABar") unittest {
   writeln("A: Bar is not clean");
   throw new Exception("BBar no good");
 }
+
