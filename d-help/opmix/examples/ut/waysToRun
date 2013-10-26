@@ -1,14 +1,20 @@
 #!/bin/bash
 # Run as usual
-echo As Usual
+echo ... Run as As Usual ...
+echo '$' rdmd -unittest -main a.d 
 rdmd -unittest -main a.d 
-echo With Summary
+echo ... With Summary ...
+echo '$' rdmd -unittest -main a.d -s
 rdmd -unittest -main a.d -s
-echo Filter to module a with summary
+echo ... Filter to module a with summary ...
+echo '$' rdmd -unittest -main a.d -m a -s
 rdmd -unittest -main a.d -m a -s
-echo Filter to module b with summary
+echo ... Filter to module b with summary ...
+echo '$' rdmd -unittest -main a.d -m b -s
 rdmd -unittest -main a.d -m b -s
-echo Filter to test ABar with summary
+echo ... Filter to test ABar with summary ...
+echo '$' rdmd -unittest -main a.d -t ABar -s
 rdmd -unittest -main a.d -t ABar -s
-echo Filter to test BBar with summary
+echo ... Filter to test BBar with summary ...
+echo '$' rdmd -unittest -main a.d -t BBa -s
 rdmd -unittest -main a.d -t BBa -s
