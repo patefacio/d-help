@@ -104,6 +104,7 @@ version(unittest) {
           func();
           results ~= TestResult(modName, testName, "pass");
         } catch(Exception e) {
+          writeln(testName, ": Caught exception ", e);
           results ~= TestResult(modName, testName, "fail");
         }
       }
